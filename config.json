@@ -1,5 +1,10 @@
 {
   "testrail_url": "https://fbader.testrail.io/",
   "testrail_user": "fuad.bader@inspirejo.com",
-  "testrail_password": "Admin@8520"
+  "testrail_password": "Admin@8520",
+
+  "jira_url": "https://your-jira-instance.com",
+  "jira_username": "your-email@company.com",
+  "jira_password": "your-api-token-or-password",
+  "jira_project_key": "TEST"
 }
