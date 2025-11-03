@@ -1,0 +1,93 @@
+version: "3.9"
+
+networks:
+  jira-net:
+
+volumes:
+  pgdata:
+  jira-data:
+  jira-shared:
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: jira-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: jiradb
+      POSTGRES_USER: jira
+      POSTGRES_PASSWORD: change_me
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - jira-net
+
+  jira:
+    image: atlassian/jira-software:9.12.15
+    container_name: jira-dc-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "8080:8080" # visit http://localhost:8080
+    environment:
+      # --- Memory / JVM ---
+      JVM_MINIMUM_MEMORY: "2g"
+      JVM_MAXIMUM_MEMORY: "4g"
+
+      # --- DB config (skips the web-based DB setup) ---
+      ATL_DB_TYPE: "postgres72"
+      ATL_DB_DRIVER: "org.postgresql.Driver"
+      ATL_JDBC_URL: "jdbc:postgresql://postgres:5432/jiradb"
+      ATL_JDBC_USER: "jira"
+      ATL_JDBC_PASSWORD: "change_me"
+
+      # --- Data Center / clustering ---
+      CLUSTERED: "true" # generate cluster.properties
+      JIRA_NODE_ID: "jira-1"
+      JIRA_SHARED_HOME: "/var/atlassian/application-data/jira/shared"
+
+      # --- (optional) reverse proxy awareness ---
+      # ATL_PROXY_NAME: "jira.example.com"
+      # ATL_PROXY_PORT: "443"
+      # ATL_TOMCAT_SCHEME: "https"
+      # ATL_TOMCAT_SECURE: "true"
+
+      # Verbose container init logs (helpful first run)
+      # VERBOSE_LOGS: "true"
+    volumes:
+      - jira-data:/var/atlassian/application-data/jira
+      - jira-shared:/var/atlassian/application-data/jira/shared
+    networks:
+      - jira-net
+
+  # --- OPTIONAL: uncomment to add a second node and front it with a proxy/load balancer ---
+  # jira2:
+  #   image: atlassian/jira-software:9.12.15
+  #   container_name: jira-dc-2
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+  #   environment:
+  #     JVM_MINIMUM_MEMORY: "2g"
+  #     JVM_MAXIMUM_MEMORY: "4g"
+  #     ATL_DB_TYPE: "postgres72"
+  #     ATL_DB_DRIVER: "org.postgresql.Driver"
+  #     ATL_JDBC_URL: "jdbc:postgresql://postgres:5432/jiradb"
+  #     ATL_JDBC_USER: "jira"
+  #     ATL_JDBC_PASSWORD: "change_me"
+  #     CLUSTERED: "true"
+  #     JIRA_NODE_ID: "jira-2"
+  #     JIRA_SHARED_HOME: "/var/atlassian/application-data/jira/shared"
+  #   volumes:
+  #     - jira-data:/var/atlassian/application-data/jira   # use a different data volume per node
+  #     - jira-shared:/var/atlassian/application-data/jira/shared
+  #   networks:
+  #     - jira-net

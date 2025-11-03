@@ -11,6 +11,43 @@ This project migrates test data from TestRail to Xray (Jira Test Management).
 
 ---
 
+## 🎨 NEW: Graphical User Interface
+
+We now offer a **GUI application** for easier migration!
+
+### Quick Start with GUI
+
+1. **Install dependencies:**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Launch the GUI:**
+
+   ```bash
+   python ui.py
+   ```
+
+   Or use the launcher scripts:
+
+   - **Linux/Mac:** `./start_gui.sh`
+   - **Windows:** `start_gui.bat`
+
+3. **Use the interface:**
+   - **Config Tab**: Set up TestRail and Jira credentials
+   - **Import Tab**: Fetch data from TestRail with one click
+   - **Export Tab**: Migrate data to Xray/Jira
+   - **Database Viewer**: Browse imported data in table format
+
+For detailed GUI instructions, see [GUI_README.md](GUI_README.md)
+
+---
+
+## Command Line Usage
+
+If you prefer command-line tools, follow the steps below:
+
 ## Prerequisites
 
 1. **Python 3.x** installed

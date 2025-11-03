@@ -1,6 +1,12 @@
 from testrail import *
 from sqlite3 import *
 import json
+import sys
+
+# Helper function to print with immediate flush
+def print_flush(*args, **kwargs):
+    print(*args, **kwargs)
+    sys.stdout.flush()
 
 with open('config.json') as config_file:
     config = json.load(config_file)
@@ -11,12 +17,12 @@ client = APIClient(config['testrail_url'])
 client.user = config['testrail_user']
 client.password = config['testrail_password']
 
-print("=" * 80)
-print("FETCHING AND STORING TESTRAIL DATA")
-print("=" * 80)
+print_flush("=" * 80)
+print_flush("FETCHING AND STORING TESTRAIL DATA")
+print_flush("=" * 80)
 
 # 1. PROJECTS
-print("\n[1/15] Fetching Projects...")
+print_flush("\n[1/15] Fetching Projects...")
 projects = client.send_get('get_projects')['projects']
 cursor.execute('''CREATE TABLE IF NOT EXISTS projects (
     id INTEGER NOT NULL PRIMARY KEY,

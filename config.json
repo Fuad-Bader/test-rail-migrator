@@ -3,8 +3,8 @@
   "testrail_user": "fuad.bader@inspirejo.com",
   "testrail_password": "Admin@8520",
 
-  "jira_url": "https://your-jira-instance.com",
-  "jira_username": "your-email@company.com",
-  "jira_password": "your-api-token-or-password",
-  "jira_project_key": "TEST"
+  "jira_url": "http://localhost:8080",
+  "jira_username": "admin",
+  "jira_password": "MTY2NzY2MzA3MjYzOnchMD+/wgP6Ut7N1/zCqNSu4Xiw",
+  "jira_project_key": "RET"
 }
