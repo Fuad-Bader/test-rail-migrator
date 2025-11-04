@@ -436,7 +436,7 @@ for project in projects:
                                     test.get('assignedto_id'), test['priority_id'], test['type_id'], 
                                     test.get('milestone_id'), test.get('refs'), test['title'], 
                                     test['template_id'], test.get('estimate'), test.get('estimate_forecast'), 
-                                    str(custom_fields)))
+                                    str(custom_fields)))    
                     test_count += 1
                 db.commit()
             except Exception as e:
@@ -487,10 +487,164 @@ for project in projects:
         pass
 print(f"✓ Stored {result_count} results")
 
+# 15. ATTACHMENTS
+print("\n[15/15] Fetching Attachments...")
+cursor.execute('''CREATE TABLE IF NOT EXISTS attachments (
+    id INTEGER NOT NULL PRIMARY KEY,
+    entity_type TEXT,
+    entity_id INTEGER,
+    filename TEXT,
+    size INTEGER,
+    created_on INTEGER,
+    user_id INTEGER,
+    url TEXT,
+    local_path TEXT
+)''')
+
+import os
+import requests
+
+# Create attachments directory
+attachments_dir = 'attachments'
+os.makedirs(attachments_dir, exist_ok=True)
+
+attachment_count = 0
+
+# Get attachments for test cases
+print("  Fetching case attachments...")
+for project in projects:
+    try:
+        suites_response = client.send_get(f'get_suites/{project["id"]}')
+        if not suites_response:
+            continue
+        suites = suites_response if isinstance(suites_response, list) else suites_response.get('suites', [])
+        
+        for suite in suites:
+            try:
+                cases_response = client.send_get(f'get_cases/{project["id"]}&suite_id={suite["id"]}')
+                if not cases_response:
+                    continue
+                cases = cases_response if isinstance(cases_response, list) else cases_response.get('cases', [])
+                
+                for case in cases:
+                    try:
+                        attachments = client.send_get(f'get_attachments_for_case/{case["id"]}')
+                        if attachments and 'attachments' in attachments:
+                            for attachment in attachments['attachments']:
+                                # Download attachment
+                                attachment_url = f"{config['testrail_url']}index.php?/attachments/get/{attachment['id']}"
+                                local_filename = f"{attachments_dir}/case_{case['id']}_{attachment['filename']}"
+                                
+                                try:
+                                    # Download file
+                                    response = requests.get(
+                                        attachment_url,
+                                        auth=(config['testrail_user'], config['testrail_password']),
+                                        stream=True
+                                    )
+                                    response.raise_for_status()
+                                    
+                                    with open(local_filename, 'wb') as f:
+                                        for chunk in response.iter_content(chunk_size=8192):
+                                            f.write(chunk)
+                                    
+                                    # Store in database
+                                    cursor.execute(
+                                        'INSERT OR REPLACE INTO attachments (id, entity_type, entity_id, filename, size, created_on, user_id, url, local_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                        (attachment['id'], 'case', case['id'], attachment['filename'], 
+                                         attachment.get('size'), attachment.get('created_on'), 
+                                         attachment.get('user_id'), attachment_url, local_filename)
+                                    )
+                                    attachment_count += 1
+                                    
+                                    if attachment_count % 10 == 0:
+                                        print(f"    Downloaded {attachment_count} attachments...")
+                                        db.commit()
+                                        
+                                except Exception as e:
+                                    print(f"    Warning: Could not download attachment {attachment['id']}: {e}")
+                                    
+                    except:
+                        pass
+            except:
+                pass
+    except:
+        pass
+
+# Get attachments for test results
+print("  Fetching result attachments...")
+for project in projects:
+    try:
+        runs = client.send_get(f'get_runs/{project["id"]}')['runs']
+        for run in runs:
+            try:
+                tests_response = client.send_get(f'get_tests/{run["id"]}')
+                if not tests_response:
+                    continue
+                tests = tests_response if isinstance(tests_response, list) else tests_response.get('tests', [])
+                
+                for test in tests:
+                    try:
+                        results_response = client.send_get(f'get_results/{test["id"]}')
+                        if not results_response:
+                            continue
+                        results = results_response if isinstance(results_response, list) else results_response.get('results', [])
+                        
+                        for result in results:
+                            try:
+                                attachments = client.send_get(f'get_attachments_for_test/{result["id"]}&result_id={result["id"]}')
+                                if attachments and 'attachments' in attachments:
+                                    for attachment in attachments['attachments']:
+                                        # Download attachment
+                                        attachment_url = f"{config['testrail_url']}index.php?/attachments/get/{attachment['id']}"
+                                        local_filename = f"{attachments_dir}/result_{result['id']}_{attachment['filename']}"
+                                        
+                                        try:
+                                            # Download file
+                                            response = requests.get(
+                                                attachment_url,
+                                                auth=(config['testrail_user'], config['testrail_password']),
+                                                stream=True
+                                            )
+                                            response.raise_for_status()
+                                            
+                                            with open(local_filename, 'wb') as f:
+                                                for chunk in response.iter_content(chunk_size=8192):
+                                                    f.write(chunk)
+                                            
+                                            # Store in database
+                                            cursor.execute(
+                                                'INSERT OR REPLACE INTO attachments (id, entity_type, entity_id, filename, size, created_on, user_id, url, local_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                                (attachment['id'], 'result', result['id'], attachment['filename'], 
+                                                 attachment.get('size'), attachment.get('created_on'), 
+                                                 attachment.get('user_id'), attachment_url, local_filename)
+                                            )
+                                            attachment_count += 1
+                                            
+                                            if attachment_count % 10 == 0:
+                                                print(f"    Downloaded {attachment_count} attachments...")
+                                                db.commit()
+                                                
+                                        except Exception as e:
+                                            print(f"    Warning: Could not download attachment {attachment['id']}: {e}")
+                                            
+                            except:
+                                pass
+                    except:
+                        pass
+            except:
+                pass
+    except:
+        pass
+
+db.commit()
+print(f"✓ Stored and downloaded {attachment_count} attachments")
+
 print("\n" + "=" * 80)
 print("MIGRATION COMPLETE!")
 print("=" * 80)
 print(f"\nDatabase saved to: testrail.db")
+print(f"Attachments saved to: {attachments_dir}/")
 print("\nSummary:")
 print(f"  - Projects: {len(projects)}")
 print(f"  - Users: {len(users)}")
@@ -502,5 +656,6 @@ print(f"  - Plans: {plan_count}")
 print(f"  - Runs: {run_count}")
 print(f"  - Tests: {test_count}")
 print(f"  - Results: {result_count}")
+print(f"  - Attachments: {attachment_count}")
 
 db.close()

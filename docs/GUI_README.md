@@ -71,6 +71,7 @@ The import fetches:
 - Test Runs
 - Test Results
 - Milestones
+- Attachments (downloaded to `attachments/` directory)
 - And more...
 
 ### 3. Export to Xray Tab
@@ -88,8 +89,11 @@ The export creates:
 - **Test Sets**: TestRail suites → Xray Test Set issues
 - **Test Executions**: TestRail runs → Xray Test Execution issues
 - **Versions**: TestRail milestones → Jira Versions
+- **Attachments**: Uploads files to corresponding Jira issues
 
 A mapping file (`migration_mapping.json`) is created to track the migration.
+
+For detailed information about attachment migration, see [ATTACHMENT_MIGRATION.md](../ATTACHMENT_MIGRATION.md).
 
 ### 4. Database Viewer Tab
 

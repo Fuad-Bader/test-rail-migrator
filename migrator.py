@@ -13,6 +13,7 @@ import sqlite3
 from requests.auth import HTTPBasicAuth
 import time
 from datetime import datetime
+import os
 
 # ============================================================================
 # CONFIGURATION
@@ -170,6 +171,38 @@ class JiraXrayClient:
         """Add comment to an issue"""
         data = {'body': comment}
         return self._make_request('POST', f'issue/{issue_key}/comment', data=data)
+    
+    def add_attachment(self, issue_key, file_path):
+        """Add attachment to an issue"""
+        url = f'{self.base_url}/rest/api/2/issue/{issue_key}/attachments'
+        
+        headers = {
+            'X-Atlassian-Token': 'no-check'
+        }
+        
+        # Add authentication header
+        if self.is_pat:
+            headers['Authorization'] = f'Bearer {self.password}'
+        
+        try:
+            with open(file_path, 'rb') as f:
+                files = {'file': (os.path.basename(file_path), f)}
+                
+                if self.is_pat:
+                    response = requests.post(url, headers=headers, files=files)
+                else:
+                    response = requests.post(
+                        url, 
+                        headers=headers, 
+                        files=files,
+                        auth=HTTPBasicAuth(self.username, self.password)
+                    )
+                
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            print(f"Warning: Could not upload attachment {file_path}: {e}")
+            return None
     
     def create_link(self, inward_issue, outward_issue, link_type='Relates'):
         """Create link between two issues"""
@@ -667,6 +700,84 @@ def migrate_milestones(client, project_key, mapping):
     print(f"✓ Migrated {milestone_count} milestones as versions")
     return mapping
 
+def migrate_attachments(client, project_key, mapping):
+    """Migrate attachments from TestRail to Jira"""
+    print("\n[6/6] Migrating Attachments...")
+    
+    db = get_db_connection()
+    cursor = db.cursor()
+    
+    # Check if attachments table exists
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'")
+    if not cursor.fetchone():
+        print("  No attachments table found - skipping")
+        db.close()
+        return mapping
+    
+    # Get all attachments
+    cursor.execute('SELECT * FROM attachments ORDER BY entity_type, entity_id')
+    attachments = cursor.fetchall()
+    columns = [desc[0] for desc in cursor.description]
+    
+    attachment_count = 0
+    skipped_count = 0
+    
+    for row in attachments:
+        attachment = dict(zip(columns, row))
+        entity_type = attachment['entity_type']
+        entity_id = attachment['entity_id']
+        local_path = attachment['local_path']
+        
+        # Determine which Jira issue to attach to
+        jira_key = None
+        
+        if entity_type == 'case':
+            # Attach to test case
+            jira_key = mapping['cases'].get(entity_id)
+        elif entity_type == 'result':
+            # Find which test execution this result belongs to
+            # Get the test_id for this result
+            cursor.execute('SELECT test_id FROM results WHERE id = ?', (entity_id,))
+            result = cursor.fetchone()
+            if result:
+                test_id = result[0]
+                # Get the run_id for this test
+                cursor.execute('SELECT run_id FROM tests WHERE id = ?', (test_id,))
+                test = cursor.fetchone()
+                if test:
+                    run_id = test[0]
+                    jira_key = mapping['runs'].get(run_id)
+        
+        if not jira_key:
+            skipped_count += 1
+            continue
+        
+        # Check if file exists
+        if not os.path.exists(local_path):
+            print(f"  Warning: File not found: {local_path}")
+            skipped_count += 1
+            continue
+        
+        try:
+            # Upload attachment
+            result = client.add_attachment(jira_key, local_path)
+            if result:
+                attachment_count += 1
+                if attachment_count % 10 == 0:
+                    print(f"  Uploaded {attachment_count} attachments...")
+        except Exception as e:
+            print(f"  ❌ Error uploading attachment {attachment['filename']} to {jira_key}: {e}")
+            skipped_count += 1
+    
+    db.close()
+    
+    if skipped_count > 0:
+        print(f"✓ Migrated {attachment_count} attachments ({skipped_count} skipped)")
+    else:
+        print(f"✓ Migrated {attachment_count} attachments")
+    
+    return mapping
+
 def save_mapping(mapping, filename='migration_mapping.json'):
     """Save migration mapping to file"""
     with open(filename, 'w') as f:
@@ -715,6 +826,7 @@ def main():
         mapping = migrate_test_runs(client, JIRA_PROJECT_KEY, mapping)
         mapping = migrate_test_results(client, JIRA_PROJECT_KEY, mapping)
         mapping = migrate_milestones(client, JIRA_PROJECT_KEY, mapping)
+        mapping = migrate_attachments(client, JIRA_PROJECT_KEY, mapping)
         
         # Save mapping
         save_mapping(mapping)
@@ -727,6 +839,16 @@ def main():
         print(f"  - Test Sets created: {len(mapping['suites'])}")
         print(f"  - Test Executions created: {len(mapping['runs'])}")
         print(f"  - Milestones migrated: {len(mapping['milestones'])}")
+        
+        # Count attachments
+        db = get_db_connection()
+        cursor = db.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'")
+        if cursor.fetchone():
+            cursor.execute('SELECT COUNT(*) FROM attachments')
+            attachment_count = cursor.fetchone()[0]
+            print(f"  - Attachments migrated: {attachment_count}")
+        db.close()
         
     except Exception as e:
         print(f"\n❌ Migration failed: {e}")

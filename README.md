@@ -36,11 +36,12 @@ We now offer a **GUI application** for easier migration!
 
 3. **Use the interface:**
    - **Config Tab**: Set up TestRail and Jira credentials
-   - **Import Tab**: Fetch data from TestRail with one click
-   - **Export Tab**: Migrate data to Xray/Jira
+   - **Import Tab**: Fetch data from TestRail with one click (including attachments)
+   - **Export Tab**: Migrate data to Xray/Jira (including attachments)
    - **Database Viewer**: Browse imported data in table format
 
 For detailed GUI instructions, see [GUI_README.md](GUI_README.md)
+For attachment migration details, see [ATTACHMENT_MIGRATION.md](ATTACHMENT_MIGRATION.md)
 
 ---
 
