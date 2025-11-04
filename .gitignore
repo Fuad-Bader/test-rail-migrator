@@ -3,4 +3,5 @@
 /testrail-api-master.zip
 /venv
 /__pycache__
+migration_mapping.json
 config.json

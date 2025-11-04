@@ -48,25 +48,52 @@ class JiraXrayClient:
     
     def __init__(self, base_url, username, password):
         self.base_url = base_url.rstrip('/')
-        self.auth = HTTPBasicAuth(username, password)
-        self.headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
+        self.username = username
+        self.password = password
+        
+        # Detect if using PAT (Personal Access Token) vs regular password
+        # PATs are typically:
+        # - Longer than normal passwords (>30 chars)
+        # - Base64-encoded (alphanumeric + = padding)
+        # - No special characters like !, @, #, etc.
+        import re
+        is_base64_like = bool(re.match(r'^[A-Za-z0-9+/=]+$', password))
+        self.is_token = (len(password) > 30 and is_base64_like) or len(password) > 40
+        
+        if self.is_token:
+            # Use Bearer token authentication for PAT
+            self.auth = None
+            self.headers = {
+                'Authorization': f'Bearer {password}',
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+            print("  ℹ Using Bearer Token authentication (PAT detected)")
+        else:
+            # Use Basic Auth for regular password
+            self.auth = HTTPBasicAuth(username, password)
+            self.headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+            print("  ℹ Using HTTP Basic Auth (password detected)")
         
     def _make_request(self, method, endpoint, data=None, params=None):
         """Make HTTP request to Jira API"""
         url = f"{self.base_url}/rest/api/2/{endpoint}"
         
         try:
+            # Use auth only if not using Bearer token (it's in headers)
+            auth_param = None if self.is_token else self.auth
+            
             if method == 'GET':
-                response = requests.get(url, auth=self.auth, headers=self.headers, params=params)
+                response = requests.get(url, auth=auth_param, headers=self.headers, params=params)
             elif method == 'POST':
-                response = requests.post(url, auth=self.auth, headers=self.headers, json=data)
+                response = requests.post(url, auth=auth_param, headers=self.headers, json=data)
             elif method == 'PUT':
-                response = requests.put(url, auth=self.auth, headers=self.headers, json=data)
+                response = requests.put(url, auth=auth_param, headers=self.headers, json=data)
             elif method == 'DELETE':
-                response = requests.delete(url, auth=self.auth, headers=self.headers)
+                response = requests.delete(url, auth=auth_param, headers=self.headers)
             
             response.raise_for_status()
             time.sleep(RATE_LIMIT_DELAY)  # Rate limiting
@@ -77,8 +104,8 @@ class JiraXrayClient:
             
         except requests.exceptions.RequestException as e:
             print(f"  ❌ API Error: {e}")
-            if hasattr(e.response, 'text'):
-                print(f"  Response: {e.response.text}")
+            if hasattr(e, 'response') and hasattr(e.response, 'text'):
+                print(f"  Response: {e.response.text[:500]}")
             raise
     
     def _make_xray_request(self, method, endpoint, data=None):
@@ -86,12 +113,15 @@ class JiraXrayClient:
         url = f"{self.base_url}/rest/raven/1.0/{endpoint}"
         
         try:
+            # Use auth only if not using Bearer token (it's in headers)
+            auth_param = None if self.is_token else self.auth
+            
             if method == 'GET':
-                response = requests.get(url, auth=self.auth, headers=self.headers)
+                response = requests.get(url, auth=auth_param, headers=self.headers)
             elif method == 'POST':
-                response = requests.post(url, auth=self.auth, headers=self.headers, json=data)
+                response = requests.post(url, auth=auth_param, headers=self.headers, json=data)
             elif method == 'PUT':
-                response = requests.put(url, auth=self.auth, headers=self.headers, json=data)
+                response = requests.put(url, auth=auth_param, headers=self.headers, json=data)
             
             response.raise_for_status()
             time.sleep(RATE_LIMIT_DELAY)
@@ -102,8 +132,8 @@ class JiraXrayClient:
             
         except requests.exceptions.RequestException as e:
             print(f"  ❌ Xray API Error: {e}")
-            if hasattr(e.response, 'text'):
-                print(f"  Response: {e.response.text}")
+            if hasattr(e, 'response') and hasattr(e.response, 'text'):
+                print(f"  Response: {e.response.text[:500]}")
             raise
     
     # ========================================================================
@@ -266,11 +296,25 @@ class JiraXrayClient:
             data['defects'] = defects  # List of defect keys
         
         try:
-            return self._make_xray_request('POST', 
-                f'api/testexec/{test_execution_key}/test/{test_key}/status', 
-                data=data)
+            # Try Xray 8.x API first (different base path)
+            url = f"{self.base_url}/rest/tests-1.0/testexec/{test_execution_key}/test/{test_key}/status"
+            auth_param = None if self.is_token else self.auth
+            
+            response = requests.post(url, auth=auth_param, headers=self.headers, json=data)
+            response.raise_for_status()
+            time.sleep(RATE_LIMIT_DELAY)
+            
+            if response.text and not response.text.startswith('<!DOCTYPE'):
+                return response.json() if response.text else {}
+            return {}
         except Exception as e:
-            print(f"  Warning: Could not update test status: {e}")
+            # Fallback to old API
+            try:
+                return self._make_xray_request('POST', 
+                    f'api/testexec/{test_execution_key}/test/{test_key}/status', 
+                    data=data)
+            except Exception as e2:
+                print(f"  Warning: Could not update test status: {e2}")
     
     def create_precondition(self, project_key, summary, description=None):
         """Create a Precondition issue"""
@@ -524,40 +568,58 @@ def migrate_test_results(client, project_key, mapping):
     test_results = cursor.fetchall()
     columns = [desc[0] for desc in cursor.description]
     
-    result_count = 0
+    # Group results by test execution for batch processing
+    results_by_execution = {}
     for row in test_results:
         test = dict(zip(columns, row))
+        run_key = mapping['runs'].get(test['run_id'])
+        test_key = mapping['cases'].get(test['case_id'])
         
-        try:
-            # Get mapped keys
-            run_key = mapping['runs'].get(test['run_id'])
-            test_key = mapping['cases'].get(test['case_id'])
+        if not run_key or not test_key:
+            continue
             
-            if not run_key or not test_key:
-                continue
-            
-            # Map status
-            xray_status = map_testrail_status_to_xray(test['status_id'], statuses)
-            
-            # Update test execution status
-            client.update_test_execution_status(
-                test_execution_key=run_key,
-                test_key=test_key,
-                status=xray_status,
-                comment=test.get('comment'),
-                defects=test.get('defects', '').split(',') if test.get('defects') else None
-            )
-            
-            result_count += 1
-            
-            if result_count % 20 == 0:
-                print(f"  ✓ Migrated {result_count} test results...")
-            
-        except Exception as e:
-            print(f"  ❌ Error migrating test result for test {test.get('id')}: {e}")
+        if run_key not in results_by_execution:
+            results_by_execution[run_key] = []
+        
+        results_by_execution[run_key].append({
+            'test_key': test_key,
+            'status': map_testrail_status_to_xray(test['status_id'], statuses),
+            'comment': test.get('comment'),
+            'defects': test.get('defects', '').split(',') if test.get('defects') else None
+        })
+    
+    result_count = 0
+    skipped_count = 0
+    
+    # Process each test execution
+    for run_key, results in results_by_execution.items():
+        for result in results:
+            try:
+                # Update test execution status
+                client.update_test_execution_status(
+                    test_execution_key=run_key,
+                    test_key=result['test_key'],
+                    status=result['status'],
+                    comment=result['comment'],
+                    defects=result['defects']
+                )
+                
+                result_count += 1
+                
+                if result_count % 20 == 0:
+                    print(f"  ✓ Migrated {result_count} test results...")
+                    
+            except Exception as e:
+                # Test might not be in execution - skip silently
+                skipped_count += 1
     
     db.close()
-    print(f"✓ Migrated {result_count} test results")
+    
+    if skipped_count > 0:
+        print(f"✓ Migrated {result_count} test results ({skipped_count} skipped)")
+    else:
+        print(f"✓ Migrated {result_count} test results")
+    
     return mapping
 
 def migrate_milestones(client, project_key, mapping):
@@ -593,7 +655,7 @@ def migrate_milestones(client, project_key, mapping):
                 due_date = datetime.fromtimestamp(milestone['due_on']).strftime('%Y-%m-%d')
                 version_data['releaseDate'] = due_date
             
-            version = client._make_request('POST', f'project/{project_key}/version', data=version_data)
+            version = client._make_request('POST', 'version', data=version_data)
             
             mapping['milestones'][milestone['id']] = version['id']
             milestone_count += 1
