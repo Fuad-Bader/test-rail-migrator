@@ -7,6 +7,9 @@ Compatible with:
 This script migrates test data from TestRail (stored in SQLite) to Xray in Jira.
 """
 
+#TODO: check test step migration, and milestone migration
+
+
 import requests
 import json
 import sqlite3
