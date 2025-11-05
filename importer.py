@@ -2,6 +2,10 @@ from testrail import *
 from sqlite3 import *
 import json
 import sys
+import base64
+import os
+import traceback
+import requests
 
 # Helper function to print with immediate flush
 def print_flush(*args, **kwargs):
@@ -498,11 +502,9 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS attachments (
     created_on INTEGER,
     user_id INTEGER,
     url TEXT,
-    local_path TEXT
+    local_path TEXT,
+    UNIQUE(id, entity_type, entity_id)
 )''')
-
-import os
-import requests
 
 # Create attachments directory
 attachments_dir = 'attachments'
@@ -536,33 +538,38 @@ for project in projects:
                                 local_filename = f"{attachments_dir}/case_{case['id']}_{attachment['filename']}"
                                 
                                 try:
-                                    # Download file
-                                    response = requests.get(
-                                        attachment_url,
-                                        auth=(config['testrail_user'], config['testrail_password']),
-                                        stream=True
-                                    )
-                                    response.raise_for_status()
+                                    # Check if already exists to avoid duplicates
+                                    cursor.execute('SELECT id FROM attachments WHERE id = ? AND entity_type = ? AND entity_id = ?',
+                                                   (attachment['id'], 'case', case['id']))
+                                    if cursor.fetchone():
+                                        print(f"    Skipping duplicate: {attachment['filename']}")
+                                        continue
                                     
-                                    with open(local_filename, 'wb') as f:
-                                        for chunk in response.iter_content(chunk_size=8192):
-                                            f.write(chunk)
+                                    # Download file using TestRail API
+                                    # The get_attachment endpoint takes a filepath and saves directly to it
+                                    # It returns the filepath on success or error message on failure
+                                    result = client.send_get(f"get_attachment/{attachment['id']}", local_filename)
                                     
-                                    # Store in database
-                                    cursor.execute(
-                                        'INSERT OR REPLACE INTO attachments (id, entity_type, entity_id, filename, size, created_on, user_id, url, local_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                                        (attachment['id'], 'case', case['id'], attachment['filename'], 
-                                         attachment.get('size'), attachment.get('created_on'), 
-                                         attachment.get('user_id'), attachment_url, local_filename)
-                                    )
-                                    attachment_count += 1
-                                    
-                                    if attachment_count % 10 == 0:
-                                        print(f"    Downloaded {attachment_count} attachments...")
-                                        db.commit()
+                                    # Verify file was written successfully
+                                    if result == local_filename and os.path.exists(local_filename) and os.path.getsize(local_filename) > 0:
+                                        # Store in database
+                                        cursor.execute(
+                                            'INSERT OR REPLACE INTO attachments (id, entity_type, entity_id, filename, size, created_on, user_id, url, local_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                            (attachment['id'], 'case', case['id'], attachment['filename'], 
+                                             attachment.get('size'), attachment.get('created_on'), 
+                                             attachment.get('user_id'), attachment_url, local_filename)
+                                        )
+                                        attachment_count += 1
+                                        
+                                        if attachment_count % 10 == 0:
+                                            print(f"    Downloaded {attachment_count} attachments...")
+                                            db.commit()
+                                    else:
+                                        print(f"    Warning: Failed to download file: {attachment['filename']} - {result}")
                                         
                                 except Exception as e:
                                     print(f"    Warning: Could not download attachment {attachment['id']}: {e}")
+                                    traceback.print_exc()
                                     
                     except:
                         pass
@@ -595,39 +602,43 @@ for project in projects:
                                 attachments = client.send_get(f'get_attachments_for_test/{result["id"]}&result_id={result["id"]}')
                                 if attachments and 'attachments' in attachments:
                                     for attachment in attachments['attachments']:
-                                        # Download attachment
-                                        attachment_url = f"{config['testrail_url']}index.php?/attachments/get/{attachment['id']}"
-                                        local_filename = f"{attachments_dir}/result_{result['id']}_{attachment['filename']}"
-                                        
                                         try:
-                                            # Download file
-                                            response = requests.get(
-                                                attachment_url,
-                                                auth=(config['testrail_user'], config['testrail_password']),
-                                                stream=True
-                                            )
-                                            response.raise_for_status()
+                                            # Check if already exists to avoid duplicates
+                                            cursor.execute('SELECT id FROM attachments WHERE id = ? AND entity_type = ? AND entity_id = ?',
+                                                           (attachment['id'], 'result', result['id']))
+                                            if cursor.fetchone():
+                                                print(f"    Skipping duplicate: {attachment['filename']}")
+                                                continue
                                             
-                                            with open(local_filename, 'wb') as f:
-                                                for chunk in response.iter_content(chunk_size=8192):
-                                                    f.write(chunk)
+                                            # Download attachment
+                                            attachment_url = f"{config['testrail_url']}index.php?/attachments/get/{attachment['id']}"
+                                            local_filename = f"{attachments_dir}/result_{result['id']}_{attachment['filename']}"
                                             
-                                            # Store in database
-                                            cursor.execute(
-                                                'INSERT OR REPLACE INTO attachments (id, entity_type, entity_id, filename, size, created_on, user_id, url, local_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                                                (attachment['id'], 'result', result['id'], attachment['filename'], 
-                                                 attachment.get('size'), attachment.get('created_on'), 
-                                                 attachment.get('user_id'), attachment_url, local_filename)
-                                            )
-                                            attachment_count += 1
+                                            # Download file using TestRail API
+                                            # The get_attachment endpoint takes a filepath and saves directly to it
+                                            # It returns the filepath on success or error message on failure
+                                            result_path = client.send_get(f"get_attachment/{attachment['id']}", local_filename)
                                             
-                                            if attachment_count % 10 == 0:
-                                                print(f"    Downloaded {attachment_count} attachments...")
-                                                db.commit()
+                                            # Verify file was written successfully
+                                            if result_path == local_filename and os.path.exists(local_filename) and os.path.getsize(local_filename) > 0:
+                                                # Store in database
+                                                cursor.execute(
+                                                    'INSERT OR REPLACE INTO attachments (id, entity_type, entity_id, filename, size, created_on, user_id, url, local_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                                    (attachment['id'], 'result', result['id'], attachment['filename'], 
+                                                     attachment.get('size'), attachment.get('created_on'), 
+                                                     attachment.get('user_id'), attachment_url, local_filename)
+                                                )
+                                                attachment_count += 1
+                                                
+                                                if attachment_count % 10 == 0:
+                                                    print(f"    Downloaded {attachment_count} attachments...")
+                                                    db.commit()
+                                            else:
+                                                print(f"    Warning: Failed to download file: {attachment['filename']} - {result_path}")
                                                 
                                         except Exception as e:
                                             print(f"    Warning: Could not download attachment {attachment['id']}: {e}")
-                                            
+                                            traceback.print_exc()
                             except:
                                 pass
                     except:

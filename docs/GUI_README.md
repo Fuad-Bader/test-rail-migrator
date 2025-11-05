@@ -6,6 +6,7 @@ A graphical user interface for migrating test data from TestRail to Xray (Jira).
 
 - **Import from TestRail**: Fetch and store all test data from TestRail into a local SQLite database
 - **Export to Xray**: Migrate stored data to Xray/Jira, creating Tests, Test Sets, and Test Executions
+- **Migration Reports**: Generate detailed statistics and progress tracking for import/export operations
 - **Database Viewer**: Browse and explore the imported TestRail data with a table viewer
 - **Configuration Manager**: Easy setup and testing of TestRail and Jira connections
 
@@ -95,7 +96,28 @@ A mapping file (`migration_mapping.json`) is created to track the migration.
 
 For detailed information about attachment migration, see [ATTACHMENT_MIGRATION.md](../ATTACHMENT_MIGRATION.md).
 
-### 4. Database Viewer Tab
+### 4. Reports Tab
+
+Generate detailed migration reports:
+
+1. Choose a report type:
+   - **Import Report**: Statistics about data imported from TestRail
+   - **Export Report**: Statistics about data migrated to Xray
+   - **Combined Report**: Complete comparison with migration completion percentage
+2. View the formatted report in the output area
+3. Click **"Save Report to File"** to save as timestamped JSON file
+
+Reports include:
+
+- Entity counts by type (test cases, runs, results, attachments, etc.)
+- Breakdown by status, priority, type
+- Xray issue keys created
+- Import vs Export comparison
+- Migration completion percentage
+
+For detailed information about reports, see [REPORTS_GUIDE.md](../REPORTS_GUIDE.md).
+
+### 5. Database Viewer Tab
 
 Browse the imported TestRail data:
 

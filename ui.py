@@ -49,6 +49,7 @@ class TestRailMigratorUI:
         # Create tabs
         self.create_import_tab()
         self.create_export_tab()
+        self.create_reports_tab()
         self.create_viewer_tab()
         self.create_config_tab()
         
@@ -335,6 +336,328 @@ class TestRailMigratorUI:
             self.export_console.insert(tk.END, traceback.format_exc())
         finally:
             self.export_btn.config(state=tk.NORMAL)
+    
+    # ========================================================================
+    # REPORTS TAB
+    # ========================================================================
+    
+    def create_reports_tab(self):
+        """Create the reports tab"""
+        reports_frame = ttk.Frame(self.notebook)
+        self.notebook.add(reports_frame, text="Reports")
+        
+        # Title
+        title = ttk.Label(reports_frame, text="Migration Reports", 
+                         font=("Arial", 16, "bold"))
+        title.pack(pady=10)
+        
+        # Info
+        info = ttk.Label(reports_frame, text="Generate detailed reports of import and export operations",
+                        font=("Arial", 10))
+        info.pack(pady=5)
+        
+        # Buttons frame
+        button_frame = ttk.Frame(reports_frame)
+        button_frame.pack(pady=10)
+        
+        ttk.Button(button_frame, text="📥 Import Report", 
+                  command=self.generate_import_report,
+                  width=20).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(button_frame, text="📤 Export Report", 
+                  command=self.generate_export_report,
+                  width=20).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(button_frame, text="📊 Combined Report", 
+                  command=self.generate_combined_report,
+                  width=20).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(button_frame, text="💾 Save Report to File", 
+                  command=self.save_report_to_file,
+                  width=20).pack(side=tk.LEFT, padx=5)
+        
+        # Report output frame
+        output_frame = ttk.LabelFrame(reports_frame, text="Report Output", padding=10)
+        output_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Report text widget with scrollbar
+        self.report_text = scrolledtext.ScrolledText(output_frame, 
+                                                      width=120, 
+                                                      height=30,
+                                                      font=("Courier", 9))
+        self.report_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Status bar
+        self.report_status = ttk.Label(reports_frame, text="Ready to generate reports", 
+                                      relief=tk.SUNKEN, anchor=tk.W)
+        self.report_status.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=2)
+        
+        # Store current report
+        self.current_report = None
+    
+    def generate_import_report(self):
+        """Generate and display import report"""
+        self.report_text.delete(1.0, tk.END)
+        self.report_status.config(text="Generating import report...")
+        self.root.update()
+        
+        try:
+            from report_generator import MigrationReporter
+            reporter = MigrationReporter()
+            report = reporter.generate_import_report()
+            self.current_report = report
+            
+            # Format and display report
+            self.display_import_report(report)
+            self.report_status.config(text="Import report generated successfully")
+        except Exception as e:
+            self.report_text.insert(tk.END, f"Error generating report: {e}\n")
+            self.report_status.config(text="Error generating report")
+    
+    def generate_export_report(self):
+        """Generate and display export report"""
+        self.report_text.delete(1.0, tk.END)
+        self.report_status.config(text="Generating export report...")
+        self.root.update()
+        
+        try:
+            from report_generator import MigrationReporter
+            reporter = MigrationReporter()
+            report = reporter.generate_export_report()
+            self.current_report = report
+            
+            # Format and display report
+            self.display_export_report(report)
+            self.report_status.config(text="Export report generated successfully")
+        except Exception as e:
+            self.report_text.insert(tk.END, f"Error generating report: {e}\n")
+            self.report_status.config(text="Error generating report")
+    
+    def generate_combined_report(self):
+        """Generate and display combined report"""
+        self.report_text.delete(1.0, tk.END)
+        self.report_status.config(text="Generating combined report...")
+        self.root.update()
+        
+        try:
+            from report_generator import MigrationReporter
+            reporter = MigrationReporter()
+            report = reporter.generate_combined_report()
+            self.current_report = report
+            
+            # Format and display report
+            self.display_combined_report(report)
+            self.report_status.config(text="Combined report generated successfully")
+        except Exception as e:
+            self.report_text.insert(tk.END, f"Error generating report: {e}\n")
+            self.report_status.config(text="Error generating report")
+    
+    def display_import_report(self, report):
+        """Display formatted import report"""
+        t = self.report_text
+        
+        t.insert(tk.END, "=" * 80 + "\n")
+        t.insert(tk.END, "IMPORT REPORT\n")
+        t.insert(tk.END, "=" * 80 + "\n")
+        t.insert(tk.END, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        t.insert(tk.END, "=" * 80 + "\n\n")
+        
+        if report['status'] == 'error':
+            t.insert(tk.END, f"❌ {report['message']}\n")
+            return
+        
+        t.insert(tk.END, "📥 IMPORT SUMMARY\n")
+        t.insert(tk.END, "-" * 80 + "\n")
+        t.insert(tk.END, f"Database: {report['database']}\n")
+        t.insert(tk.END, f"Total Tables: {report['summary']['total_tables']}\n")
+        t.insert(tk.END, f"Tables with Data: {report['summary']['tables_with_data']}\n")
+        t.insert(tk.END, f"Total Records: {report['summary']['total_records']}\n")
+        
+        if 'entities' in report:
+            t.insert(tk.END, "\n📊 DETAILED BREAKDOWN\n")
+            t.insert(tk.END, "-" * 80 + "\n")
+            
+            entities = report['entities']
+            
+            # Projects
+            if 'projects' in entities:
+                t.insert(tk.END, f"\n✓ Projects: {entities['projects']['count']}\n")
+                for proj in entities['projects']['items']:
+                    t.insert(tk.END, f"  - ID {proj['id']}: {proj['name']}\n")
+            
+            # Users
+            if 'users' in entities:
+                t.insert(tk.END, f"\n✓ Users: {entities['users']['count']}\n")
+                t.insert(tk.END, f"  - Active: {entities['users'].get('active', 'N/A')}\n")
+            
+            # Suites
+            if 'suites' in entities:
+                t.insert(tk.END, f"\n✓ Test Suites: {entities['suites']['count']}\n")
+                for suite in entities['suites']['items']:
+                    t.insert(tk.END, f"  - ID {suite['id']}: {suite['name']} (Project {suite['project_id']})\n")
+            
+            # Sections
+            if 'sections' in entities:
+                t.insert(tk.END, f"\n✓ Sections: {entities['sections']['count']}\n")
+            
+            # Cases
+            if 'cases' in entities:
+                t.insert(tk.END, f"\n✓ Test Cases: {entities['cases']['count']}\n")
+                if 'by_priority' in entities['cases']:
+                    t.insert(tk.END, "  By Priority:\n")
+                    for priority, count in entities['cases']['by_priority'].items():
+                        t.insert(tk.END, f"    - Priority {priority}: {count}\n")
+                if 'by_type' in entities['cases']:
+                    t.insert(tk.END, "  By Type:\n")
+                    for type_id, count in entities['cases']['by_type'].items():
+                        t.insert(tk.END, f"    - Type {type_id}: {count}\n")
+            
+            # Runs
+            if 'runs' in entities:
+                t.insert(tk.END, f"\n✓ Test Runs: {entities['runs']['count']}\n")
+                if 'by_status' in entities['runs']:
+                    for status, count in entities['runs']['by_status'].items():
+                        t.insert(tk.END, f"  - {status.title()}: {count}\n")
+            
+            # Results
+            if 'results' in entities:
+                t.insert(tk.END, f"\n✓ Test Results: {entities['results']['count']}\n")
+                if 'by_status' in entities['results']:
+                    t.insert(tk.END, "  By Status:\n")
+                    for status_id, count in entities['results']['by_status'].items():
+                        t.insert(tk.END, f"    - Status {status_id}: {count}\n")
+            
+            # Milestones
+            if 'milestones' in entities:
+                t.insert(tk.END, f"\n✓ Milestones: {entities['milestones']['count']}\n")
+                if 'by_status' in entities['milestones']:
+                    for status, count in entities['milestones']['by_status'].items():
+                        t.insert(tk.END, f"  - {status.title()}: {count}\n")
+            
+            # Attachments
+            if 'attachments' in entities:
+                t.insert(tk.END, f"\n✓ Attachments: {entities['attachments']['count']}\n")
+                t.insert(tk.END, f"  - Total Size: {entities['attachments']['total_size_mb']} MB\n")
+                if 'by_entity_type' in entities['attachments']:
+                    t.insert(tk.END, "  By Type:\n")
+                    for entity_type, count in entities['attachments']['by_entity_type'].items():
+                        t.insert(tk.END, f"    - {entity_type}: {count}\n")
+        
+        t.insert(tk.END, "\n" + "=" * 80 + "\n")
+    
+    def display_export_report(self, report):
+        """Display formatted export report"""
+        t = self.report_text
+        
+        t.insert(tk.END, "=" * 80 + "\n")
+        t.insert(tk.END, "EXPORT REPORT\n")
+        t.insert(tk.END, "=" * 80 + "\n")
+        t.insert(tk.END, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        t.insert(tk.END, "=" * 80 + "\n\n")
+        
+        if report['status'] == 'error':
+            t.insert(tk.END, f"❌ {report['message']}\n")
+            return
+        
+        t.insert(tk.END, "📤 EXPORT SUMMARY\n")
+        t.insert(tk.END, "-" * 80 + "\n")
+        t.insert(tk.END, f"Mapping File: {report['mapping_file']}\n")
+        t.insert(tk.END, f"Total Entities Migrated: {report['summary']['total_entities_migrated']}\n")
+        t.insert(tk.END, f"Entity Types: {report['summary']['entity_types']}\n")
+        
+        t.insert(tk.END, "\n📊 DETAILED BREAKDOWN\n")
+        t.insert(tk.END, "-" * 80 + "\n")
+        
+        details = report['details']
+        
+        # Test Cases
+        if 'test_cases' in details:
+            t.insert(tk.END, f"\n✓ Test Cases (Xray Test issues): {details['test_cases']['count']}\n")
+            xray_keys = details['test_cases']['xray_keys']
+            t.insert(tk.END, f"  - Xray Keys: {', '.join(xray_keys[:5])}")
+            if len(xray_keys) > 5:
+                t.insert(tk.END, f" ... and {len(xray_keys) - 5} more")
+            t.insert(tk.END, "\n")
+        
+        # Test Suites
+        if 'test_suites' in details:
+            t.insert(tk.END, f"\n✓ Test Suites (Xray Test Set issues): {details['test_suites']['count']}\n")
+            t.insert(tk.END, f"  - Xray Keys: {', '.join(details['test_suites']['xray_keys'])}\n")
+        
+        # Test Executions
+        if 'test_executions' in details:
+            t.insert(tk.END, f"\n✓ Test Executions (Xray Test Execution issues): {details['test_executions']['count']}\n")
+            t.insert(tk.END, f"  - Xray Keys: {', '.join(details['test_executions']['xray_keys'])}\n")
+        
+        # Milestones
+        if 'milestones' in details:
+            t.insert(tk.END, f"\n✓ Milestones (Jira Versions): {details['milestones']['count']}\n")
+        
+        # Test Plans
+        if 'test_plans' in details:
+            t.insert(tk.END, f"\n✓ Test Plans (Xray Test Plan issues): {details['test_plans']['count']}\n")
+        
+        # Attachments
+        if 'attachments' in details:
+            t.insert(tk.END, f"\n✓ Attachments: {details['attachments']['count']}\n")
+        
+        t.insert(tk.END, "\n" + "=" * 80 + "\n")
+    
+    def display_combined_report(self, report):
+        """Display formatted combined report"""
+        t = self.report_text
+        
+        # Display import report
+        if 'import' in report:
+            self.display_import_report(report['import'])
+        
+        # Display export report
+        t.insert(tk.END, "\n\n")
+        if 'export' in report:
+            self.display_export_report(report['export'])
+        
+        # Display comparison
+        if report.get('comparison'):
+            t.insert(tk.END, "\n\n" + "=" * 80 + "\n")
+            t.insert(tk.END, "📊 IMPORT vs EXPORT COMPARISON\n")
+            t.insert(tk.END, "=" * 80 + "\n\n")
+            
+            comparison = report['comparison']
+            
+            # Header
+            t.insert(tk.END, f"{'Entity Type':<20} {'Imported':>12} {'Exported':>12} {'Pending':>12}\n")
+            t.insert(tk.END, "-" * 60 + "\n")
+            
+            # Data rows
+            for entity_type, data in comparison.items():
+                entity_name = entity_type.replace('_', ' ').title()
+                t.insert(tk.END, f"{entity_name:<20} {data['imported']:>12} {data['exported']:>12} {data['pending']:>12}\n")
+            
+            # Calculate completion percentage
+            total_imported = sum(d['imported'] for d in comparison.values())
+            total_exported = sum(d['exported'] for d in comparison.values())
+            
+            if total_imported > 0:
+                completion = (total_exported / total_imported) * 100
+                t.insert(tk.END, "\n" + "-" * 60 + "\n")
+                t.insert(tk.END, f"Overall Migration Completion: {completion:.1f}%\n")
+            
+            t.insert(tk.END, "=" * 80 + "\n")
+    
+    def save_report_to_file(self):
+        """Save current report to JSON file"""
+        if self.current_report is None:
+            messagebox.showwarning("No Report", "Please generate a report first")
+            return
+        
+        try:
+            from report_generator import MigrationReporter
+            reporter = MigrationReporter()
+            filename = reporter.save_report_to_file(self.current_report)
+            messagebox.showinfo("Success", f"Report saved to: {filename}")
+            self.report_status.config(text=f"Report saved to: {filename}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save report: {e}")
     
     # ========================================================================
     # DATABASE VIEWER TAB

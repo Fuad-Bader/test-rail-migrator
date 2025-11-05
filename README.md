@@ -38,10 +38,12 @@ We now offer a **GUI application** for easier migration!
    - **Config Tab**: Set up TestRail and Jira credentials
    - **Import Tab**: Fetch data from TestRail with one click (including attachments)
    - **Export Tab**: Migrate data to Xray/Jira (including attachments)
+   - **Reports Tab**: Generate detailed migration statistics and progress reports
    - **Database Viewer**: Browse imported data in table format
 
 For detailed GUI instructions, see [GUI_README.md](GUI_README.md)
 For attachment migration details, see [ATTACHMENT_MIGRATION.md](ATTACHMENT_MIGRATION.md)
+For report generation guide, see [REPORTS_GUIDE.md](REPORTS_GUIDE.md)
 
 ---
 
@@ -303,6 +305,22 @@ The file `migration_mapping.json` contains the mapping between TestRail IDs and 
 ### Issue: "Permission denied"
 
 **Solution:** Verify your Jira user has permissions to create issues and manage the project.
+
+### Issue: Test Execution Statuses Not Updating
+
+**Problem:** Test executions are created but statuses remain as "TODO" instead of PASS/FAIL.
+
+**Solution:** The Xray custom field needs to be added to your Jira screen configuration. See the detailed guides:
+
+- **Quick Fix (5 steps):** [SCREEN_CONFIG_QUICKFIX.md](SCREEN_CONFIG_QUICKFIX.md)
+- **Complete Guide:** [JIRA_SCREEN_CONFIG_GUIDE.md](JIRA_SCREEN_CONFIG_GUIDE.md)
+
+**Summary:**
+
+1. Go to Jira Settings → Issues → Screens
+2. Find the screen used by Test Execution issue type
+3. Add the "Test Execution Status" field to the screen
+4. Re-run your migration
 
 ---
 

@@ -181,14 +181,26 @@ class JiraXrayClient:
         }
         
         # Add authentication header
-        if self.is_pat:
+        if self.is_token:
             headers['Authorization'] = f'Bearer {self.password}'
         
         try:
+            # Verify file exists and is readable
+            if not os.path.exists(file_path):
+                print(f"❌ File not found: {file_path}")
+                return None
+            
+            file_size = os.path.getsize(file_path)
+            if file_size == 0:
+                print(f"❌ File is empty: {file_path}")
+                return None
+            
+            print(f"  📎 Uploading {os.path.basename(file_path)} ({file_size} bytes) to {issue_key}...")
+            
             with open(file_path, 'rb') as f:
                 files = {'file': (os.path.basename(file_path), f)}
                 
-                if self.is_pat:
+                if self.is_token:
                     response = requests.post(url, headers=headers, files=files)
                 else:
                     response = requests.post(
@@ -199,9 +211,16 @@ class JiraXrayClient:
                     )
                 
                 response.raise_for_status()
-                return response.json()
+                result = response.json()
+                print(f"  ✓ Uploaded successfully (ID: {result[0]['id']})")
+                return result
+        except requests.exceptions.HTTPError as e:
+            print(f"❌ HTTP Error uploading {file_path}: {e.response.status_code} - {e.response.text}")
+            return None
         except Exception as e:
-            print(f"Warning: Could not upload attachment {file_path}: {e}")
+            print(f"❌ Error uploading {file_path}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def create_link(self, inward_issue, outward_issue, link_type='Relates'):
@@ -782,6 +801,55 @@ def save_mapping(mapping, filename='migration_mapping.json'):
     """Save migration mapping to file"""
     with open(filename, 'w') as f:
         json.dump(mapping, f, indent=2)
+
+def store_mapping_in_database(mapping):
+    """Store Jira issue mapping in the database for future reference"""
+    print("\nStoring mappings in database...")
+    
+    db = get_db_connection()
+    cursor = db.cursor()
+    
+    # Create mapping table if it doesn't exist
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS jira_mappings (
+            testrail_entity_type TEXT,
+            testrail_entity_id INTEGER,
+            jira_key TEXT,
+            PRIMARY KEY (testrail_entity_type, testrail_entity_id)
+        )
+    ''')
+    
+    total_count = 0
+    
+    # Insert case mappings
+    for testrail_id, jira_key in mapping['cases'].items():
+        cursor.execute(
+            'INSERT OR REPLACE INTO jira_mappings (testrail_entity_type, testrail_entity_id, jira_key) VALUES (?, ?, ?)',
+            ('case', int(testrail_id), jira_key)
+        )
+        total_count += 1
+    
+    # Insert suite mappings
+    for testrail_id, jira_key in mapping['suites'].items():
+        cursor.execute(
+            'INSERT OR REPLACE INTO jira_mappings (testrail_entity_type, testrail_entity_id, jira_key) VALUES (?, ?, ?)',
+            ('suite', int(testrail_id), jira_key)
+        )
+        total_count += 1
+    
+    # Insert run mappings
+    for testrail_id, jira_key in mapping['runs'].items():
+        cursor.execute(
+            'INSERT OR REPLACE INTO jira_mappings (testrail_entity_type, testrail_entity_id, jira_key) VALUES (?, ?, ?)',
+            ('run', int(testrail_id), jira_key)
+        )
+        total_count += 1
+    
+    db.commit()
+    db.close()
+    
+    print(f"✓ Stored {total_count} mappings in database")
+    return total_count
     print(f"\n✓ Mapping saved to {filename}")
 
 # ============================================================================
@@ -828,8 +896,9 @@ def main():
         mapping = migrate_milestones(client, JIRA_PROJECT_KEY, mapping)
         mapping = migrate_attachments(client, JIRA_PROJECT_KEY, mapping)
         
-        # Save mapping
+        # Save mapping to file and database
         save_mapping(mapping)
+        store_mapping_in_database(mapping)
         
         print("\n" + "=" * 80)
         print("MIGRATION COMPLETE!")
