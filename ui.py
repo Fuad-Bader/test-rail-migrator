@@ -39,6 +39,9 @@ class TestRailMigratorUI:
         self.root.title("TestRail to Xray Migrator")
         self.root.geometry("1200x800")
         
+        # Set up proper window close handler
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
         # Load configuration
         self.load_config()
         
@@ -46,7 +49,11 @@ class TestRailMigratorUI:
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
+        # Bind tab change event to update project labels
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+        
         # Create tabs
+        self.create_project_selection_tab()
         self.create_import_tab()
         self.create_export_tab()
         self.create_reports_tab()
@@ -72,34 +79,422 @@ class TestRailMigratorUI:
             messagebox.showerror("Error", f"Failed to save configuration: {e}")
     
     # ========================================================================
+    # PROJECT SELECTION TAB
+    # ========================================================================
+    
+    def create_project_selection_tab(self):
+        """Create the project selection tab for choosing TestRail and Jira projects"""
+        project_frame = ttk.Frame(self.notebook)
+        self.notebook.add(project_frame, text="1. Select Projects")
+        
+        # Title
+        title = ttk.Label(project_frame, text="Project Selection", 
+                         font=("Arial", 16, "bold"))
+        title.pack(pady=10)
+        
+        # Check for existing configuration
+        migration_config = self.load_migration_config()
+        
+        # Current selection display
+        current_frame = ttk.LabelFrame(project_frame, text="Current Selection", padding=10)
+        current_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        if migration_config:
+            ttk.Label(current_frame, text=f"✓ TestRail Project: {migration_config.get('testrail_project_name')} (ID: {migration_config.get('testrail_project_id')})", 
+                     foreground="green", font=("Arial", 10, "bold")).pack(anchor=tk.W, pady=2)
+            ttk.Label(current_frame, text=f"✓ Jira Project: {migration_config.get('jira_project_name')} ({migration_config.get('jira_project_key')})", 
+                     foreground="green", font=("Arial", 10, "bold")).pack(anchor=tk.W, pady=2)
+        else:
+            ttk.Label(current_frame, text="⚠ No project selection found. Please select projects below.", 
+                     foreground="orange", font=("Arial", 10, "bold")).pack(anchor=tk.W)
+        
+        # Instructions
+        instructions = ttk.LabelFrame(project_frame, text="Instructions", padding=10)
+        instructions.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(instructions, text="1. Ensure your credentials are configured in the Config tab\n"
+                                    "2. Click 'Refresh Projects' to load available projects\n"
+                                    "3. Select a TestRail project to import\n"
+                                    "4. Select a Jira project (or add one by key) as migration target\n"
+                                    "5. Click 'Save Selection' to proceed",
+                 justify=tk.LEFT).pack(anchor=tk.W)
+        
+        # Main selection area
+        selection_paned = ttk.PanedWindow(project_frame, orient=tk.HORIZONTAL)
+        selection_paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        # TestRail projects panel
+        testrail_frame = ttk.LabelFrame(selection_paned, text="TestRail Projects", padding=10)
+        selection_paned.add(testrail_frame, weight=1)
+        
+        ttk.Button(testrail_frame, text="Refresh TestRail Projects", 
+                  command=self.refresh_testrail_projects).pack(pady=5)
+        
+        self.testrail_projects_tree = ttk.Treeview(testrail_frame, columns=("ID", "Status"), 
+                                                    show="tree headings", selectmode="browse")
+        self.testrail_projects_tree.heading("#0", text="Project Name")
+        self.testrail_projects_tree.heading("ID", text="ID")
+        self.testrail_projects_tree.heading("Status", text="Status")
+        self.testrail_projects_tree.column("ID", width=60)
+        self.testrail_projects_tree.column("Status", width=100)
+        
+        testrail_scroll = ttk.Scrollbar(testrail_frame, orient=tk.VERTICAL, 
+                                       command=self.testrail_projects_tree.yview)
+        self.testrail_projects_tree.configure(yscrollcommand=testrail_scroll.set)
+        
+        self.testrail_projects_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        testrail_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Jira projects panel
+        jira_frame = ttk.LabelFrame(selection_paned, text="Jira Projects", padding=10)
+        selection_paned.add(jira_frame, weight=1)
+        
+        button_frame = ttk.Frame(jira_frame)
+        button_frame.pack(pady=5)
+        
+        ttk.Button(button_frame, text="Refresh Jira Projects", 
+                  command=self.refresh_jira_projects).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(button_frame, text="Add Project by Key", 
+                  command=self.add_jira_project_by_key, 
+                  style="Accent.TButton").pack(side=tk.LEFT, padx=5)
+        
+        self.jira_projects_tree = ttk.Treeview(jira_frame, columns=("Key",), 
+                                               show="tree headings", selectmode="browse")
+        self.jira_projects_tree.heading("#0", text="Project Name")
+        self.jira_projects_tree.heading("Key", text="Key")
+        self.jira_projects_tree.column("Key", width=100)
+        
+        jira_scroll = ttk.Scrollbar(jira_frame, orient=tk.VERTICAL, 
+                                    command=self.jira_projects_tree.yview)
+        self.jira_projects_tree.configure(yscrollcommand=jira_scroll.set)
+        
+        self.jira_projects_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        jira_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Save button
+        save_frame = ttk.Frame(project_frame)
+        save_frame.pack(pady=10)
+        
+        ttk.Button(save_frame, text="Save Selection", 
+                  command=self.save_project_selection,
+                  style="Accent.TButton").pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(save_frame, text="Clear Selection", 
+                  command=self.clear_project_selection).pack(side=tk.LEFT, padx=5)
+    
+    def load_migration_config(self):
+        """Load existing migration configuration"""
+        try:
+            with open('migration_config.json') as f:
+                return json.load(f)
+        except:
+            return None
+    
+    def refresh_testrail_projects(self):
+        """Fetch and display TestRail projects"""
+        # Clear existing items
+        for item in self.testrail_projects_tree.get_children():
+            self.testrail_projects_tree.delete(item)
+        
+        if not self.config.get('testrail_url') or not self.config.get('testrail_user'):
+            messagebox.showerror("Configuration Error", 
+                               "Please configure TestRail credentials in the Config tab first!")
+            return
+        
+        try:
+            from testrail import APIClient
+            
+            client = APIClient(self.config['testrail_url'])
+            client.user = self.config['testrail_user']
+            client.password = self.config['testrail_password']
+            
+            response = client.send_get('get_projects')
+            projects = response.get('projects', [])
+            
+            for project in projects:
+                status = "✓ Active" if not project.get('is_completed') else "✗ Completed"
+                self.testrail_projects_tree.insert("", tk.END, text=project['name'],
+                                                   values=(project['id'], status),
+                                                   tags=(project['id'], project['name']))
+            
+            messagebox.showinfo("Success", f"Loaded {len(projects)} TestRail projects")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to fetch TestRail projects: {e}")
+    
+    def refresh_jira_projects(self):
+        """Fetch and display Jira projects"""
+        # Clear existing items
+        for item in self.jira_projects_tree.get_children():
+            self.jira_projects_tree.delete(item)
+        
+        if not self.config.get('jira_url') or not self.config.get('jira_username'):
+            messagebox.showerror("Configuration Error", 
+                               "Please configure Jira credentials in the Config tab first!")
+            return
+        
+        try:
+            import requests
+            from requests.auth import HTTPBasicAuth
+            import re
+            
+            base_url = self.config['jira_url']
+            username = self.config['jira_username']
+            password = self.config['jira_password']
+            
+            # Detect if using PAT
+            is_base64_like = bool(re.match(r'^[A-Za-z0-9+/=]+$', password))
+            is_token = (len(password) > 30 and is_base64_like) or len(password) > 40
+            
+            if is_token:
+                headers = {
+                    'Authorization': f'Bearer {password}',
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }
+                auth = None
+            else:
+                headers = {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }
+                auth = HTTPBasicAuth(username, password)
+            
+            url = f"{base_url}/rest/api/2/project"
+            response = requests.get(url, auth=auth, headers=headers)
+            response.raise_for_status()
+            projects = response.json()
+            
+            for project in projects:
+                self.jira_projects_tree.insert("", tk.END, text=project['name'],
+                                              values=(project['key'],),
+                                              tags=(project['key'], project['name'], 
+                                                   project.get('id', '')))
+            
+            messagebox.showinfo("Success", f"Loaded {len(projects)} Jira projects")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to fetch Jira projects: {e}")
+    
+    def add_jira_project_by_key(self):
+        """Show dialog to add a Jira project by entering its key"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add Jira Project by Key")
+        dialog.geometry("450x200")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        ttk.Label(dialog, text="Add Jira Project by Key", 
+                 font=("Arial", 14, "bold")).pack(pady=10)
+        
+        ttk.Label(dialog, text="Enter the existing Jira project key to add it to the list:",
+                 wraplength=400).pack(pady=10, padx=20)
+        
+        # Form fields
+        form_frame = ttk.Frame(dialog, padding=20)
+        form_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(form_frame, text="Project Key:").grid(row=0, column=0, sticky=tk.W, pady=5, padx=5)
+        key_entry = ttk.Entry(form_frame, width=20)
+        key_entry.grid(row=0, column=1, pady=5, padx=5)
+        key_entry.focus()
+        
+        # Buttons
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=10)
+        
+        def add_project():
+            project_key = key_entry.get().strip().upper()
+            
+            if not project_key:
+                messagebox.showerror("Error", "Project key cannot be empty")
+                return
+            
+            if not project_key.isalnum() or len(project_key) < 2 or len(project_key) > 10:
+                messagebox.showerror("Error", "Project key must be 2-10 alphanumeric characters")
+                return
+            
+            try:
+                import requests
+                from requests.auth import HTTPBasicAuth
+                import re
+                
+                base_url = self.config['jira_url']
+                username = self.config['jira_username']
+                password = self.config['jira_password']
+                
+                # Detect if using PAT
+                is_base64_like = bool(re.match(r'^[A-Za-z0-9+/=]+$', password))
+                is_token = (len(password) > 30 and is_base64_like) or len(password) > 40
+                
+                if is_token:
+                    headers = {
+                        'Authorization': f'Bearer {password}',
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    }
+                    auth = None
+                else:
+                    headers = {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    }
+                    auth = HTTPBasicAuth(username, password)
+                
+                # Fetch project details to verify it exists
+                url = f"{base_url}/rest/api/2/project/{project_key}"
+                response = requests.get(url, auth=auth, headers=headers)
+                
+                if response.status_code == 404:
+                    messagebox.showerror("Error", f"Project '{project_key}' not found in Jira.")
+                    return
+                elif response.status_code not in [200, 201]:
+                    messagebox.showerror("Error", 
+                        f"Failed to fetch project (HTTP {response.status_code}):\n{response.text[:500]}")
+                    return
+                
+                project = response.json()
+                project_name = project.get('name', project_key)
+                project_id = project.get('id', '')
+                
+                # Check if already in the list
+                for item in self.jira_projects_tree.get_children():
+                    item_data = self.jira_projects_tree.item(item)
+                    if item_data['tags'] and item_data['tags'][0] == project_key:
+                        messagebox.showinfo("Info", f"Project '{project_key}' is already in the list.")
+                        dialog.destroy()
+                        return
+                
+                messagebox.showinfo("Success", f"Added project '{project_name}' ({project_key})")
+                
+                # Add to tree
+                self.jira_projects_tree.insert("", tk.END, text=project_name,
+                                              values=(project_key,),
+                                              tags=(project_key, project_name, project_id))
+                
+                dialog.destroy()
+                
+            except requests.exceptions.RequestException as e:
+                error_msg = f"Request failed: {e}"
+                if hasattr(e, 'response') and e.response is not None:
+                    error_msg += f"\n\nStatus: {e.response.status_code}\nResponse: {e.response.text[:500]}"
+                messagebox.showerror("Error", error_msg)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to add project: {e}")
+        
+        ttk.Button(button_frame, text="Add Project", command=add_project,
+                  style="Accent.TButton").pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+    
+    def save_project_selection(self):
+        """Save the selected projects to migration_config.json"""
+        # Get selected TestRail project
+        testrail_selection = self.testrail_projects_tree.selection()
+        if not testrail_selection:
+            messagebox.showerror("Error", "Please select a TestRail project")
+            return
+        
+        testrail_item = self.testrail_projects_tree.item(testrail_selection[0])
+        testrail_tags = testrail_item['tags']
+        testrail_project_id = testrail_tags[0]
+        testrail_project_name = testrail_tags[1]
+        
+        # Get selected Jira project
+        jira_selection = self.jira_projects_tree.selection()
+        if not jira_selection:
+            messagebox.showerror("Error", "Please select a Jira project")
+            return
+        
+        jira_item = self.jira_projects_tree.item(jira_selection[0])
+        jira_tags = jira_item['tags']
+        jira_project_key = jira_tags[0]
+        jira_project_name = jira_tags[1]
+        
+        # Save configuration
+        migration_config = {
+            'testrail_project_id': testrail_project_id,
+            'testrail_project_name': testrail_project_name,
+            'jira_project_key': jira_project_key,
+            'jira_project_name': jira_project_name
+        }
+        
+        try:
+            with open('migration_config.json', 'w') as f:
+                json.dump(migration_config, f, indent=2)
+            
+            messagebox.showinfo("Success", 
+                              f"Project selection saved!\n\n"
+                              f"TestRail: {testrail_project_name} (ID: {testrail_project_id})\n"
+                              f"Jira: {jira_project_name} ({jira_project_key})\n\n"
+                              f"You can now proceed to the Import tab.")
+            
+            # Update the project labels in Import, Export, and Reports tabs
+            self.update_import_project_labels()
+            self.update_export_project_labels()
+            self.update_reports_project_label()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save configuration: {e}")
+    
+    def clear_project_selection(self):
+        """Clear the project selection"""
+        try:
+            if os.path.exists('migration_config.json'):
+                os.remove('migration_config.json')
+            messagebox.showinfo("Success", "Project selection cleared")
+            # Update the project labels in Import, Export, and Reports tabs
+            self.update_import_project_labels()
+            self.update_export_project_labels()
+            self.update_reports_project_label()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to clear selection: {e}")
+    
+    # ========================================================================
     # IMPORT TAB
     # ========================================================================
     
     def create_import_tab(self):
         """Create the import tab for fetching data from TestRail"""
         import_frame = ttk.Frame(self.notebook)
-        self.notebook.add(import_frame, text="Import from TestRail")
+        self.notebook.add(import_frame, text="2. Import from TestRail")
         
         # Title
         title = ttk.Label(import_frame, text="Import Data from TestRail", 
                          font=("Arial", 16, "bold"))
         title.pack(pady=10)
         
+        # Project selection status
+        selection_frame = ttk.LabelFrame(import_frame, text="Selected Projects", padding=10)
+        selection_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Create labels that will be updated dynamically
+        self.import_testrail_label = ttk.Label(selection_frame, text="", font=("Arial", 10, "bold"))
+        self.import_testrail_label.pack(anchor=tk.W, pady=2)
+        
+        self.import_jira_label = ttk.Label(selection_frame, text="", font=("Arial", 10, "bold"))
+        self.import_jira_label.pack(anchor=tk.W, pady=2)
+        
+        self.import_warning_label = ttk.Label(selection_frame, text="", font=("Arial", 10, "bold"))
+        self.import_warning_label.pack(anchor=tk.W)
+        
+        # Initial update
+        self.update_import_project_labels()
+        
         # Configuration display
-        config_frame = ttk.LabelFrame(import_frame, text="Configuration", padding=10)
+        config_frame = ttk.LabelFrame(import_frame, text="TestRail Configuration", padding=10)
         config_frame.pack(fill=tk.X, padx=10, pady=5)
         
         ttk.Label(config_frame, text=f"TestRail URL: {self.config.get('testrail_url', 'Not set')}").pack(anchor=tk.W)
         ttk.Label(config_frame, text=f"TestRail User: {self.config.get('testrail_user', 'Not set')}").pack(anchor=tk.W)
-        ttk.Label(config_frame, text="TestRail Password: ********" if self.config.get('testrail_password') else "Not set").pack(anchor=tk.W)
         
         # Instructions
         instructions = ttk.LabelFrame(import_frame, text="Instructions", padding=10)
         instructions.pack(fill=tk.X, padx=10, pady=5)
-        ttk.Label(instructions, text="1. Ensure your TestRail credentials are configured in the Config tab\n"
-                                    "2. Click 'Start Import' to fetch all data from TestRail\n"
-                                    "3. Data will be stored in 'testrail.db' SQLite database\n"
-                                    "4. Monitor the progress in the console below",
+        ttk.Label(instructions, text="1. Ensure projects are selected in the 'Select Projects' tab\n"
+                                    "2. Ensure your TestRail credentials are configured in the Config tab\n"
+                                    "3. Click 'Start Import' to fetch the selected TestRail project data\n"
+                                    "4. Data will be stored in 'testrail.db' SQLite database\n"
+                                    "5. Monitor the progress in the console below",
                  justify=tk.LEFT).pack(anchor=tk.W)
         
         # Control buttons
@@ -206,29 +601,46 @@ class TestRailMigratorUI:
     def create_export_tab(self):
         """Create the export tab for migrating to Xray"""
         export_frame = ttk.Frame(self.notebook)
-        self.notebook.add(export_frame, text="Export to Xray")
+        self.notebook.add(export_frame, text="3. Export to Xray")
         
         # Title
         title = ttk.Label(export_frame, text="Export Data to Xray (Jira)", 
                          font=("Arial", 16, "bold"))
         title.pack(pady=10)
         
+        # Project selection status
+        selection_frame = ttk.LabelFrame(export_frame, text="Selected Projects", padding=10)
+        selection_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Create labels that will be updated dynamically
+        self.export_testrail_label = ttk.Label(selection_frame, text="", font=("Arial", 10, "bold"))
+        self.export_testrail_label.pack(anchor=tk.W, pady=2)
+        
+        self.export_jira_label = ttk.Label(selection_frame, text="", font=("Arial", 10, "bold"))
+        self.export_jira_label.pack(anchor=tk.W, pady=2)
+        
+        self.export_warning_label = ttk.Label(selection_frame, text="", font=("Arial", 10, "bold"))
+        self.export_warning_label.pack(anchor=tk.W)
+        
+        # Initial update
+        self.update_export_project_labels()
+        
         # Configuration display
-        config_frame = ttk.LabelFrame(export_frame, text="Configuration", padding=10)
+        config_frame = ttk.LabelFrame(export_frame, text="Jira Configuration", padding=10)
         config_frame.pack(fill=tk.X, padx=10, pady=5)
         
         ttk.Label(config_frame, text=f"Jira URL: {self.config.get('jira_url', 'Not set')}").pack(anchor=tk.W)
         ttk.Label(config_frame, text=f"Jira Username: {self.config.get('jira_username', 'Not set')}").pack(anchor=tk.W)
-        ttk.Label(config_frame, text=f"Jira Project: {self.config.get('jira_project_key', 'Not set')}").pack(anchor=tk.W)
         
         # Instructions
         instructions = ttk.LabelFrame(export_frame, text="Instructions", padding=10)
         instructions.pack(fill=tk.X, padx=10, pady=5)
-        ttk.Label(instructions, text="1. Ensure you have imported TestRail data first\n"
-                                    "2. Configure Jira/Xray credentials in the Config tab\n"
-                                    "3. Click 'Start Export' to migrate data to Xray\n"
-                                    "4. The process creates Tests, Test Sets, and Test Executions\n"
-                                    "5. Monitor progress in the console below",
+        ttk.Label(instructions, text="1. Ensure projects are selected in the 'Select Projects' tab\n"
+                                    "2. Ensure you have imported TestRail data first (Import tab)\n"
+                                    "3. Configure Jira/Xray credentials in the Config tab\n"
+                                    "4. Click 'Start Export' to migrate data to Xray\n"
+                                    "5. The process creates Tests, Test Sets, and Test Executions\n"
+                                    "6. Monitor progress in the console below",
                  justify=tk.LEFT).pack(anchor=tk.W)
         
         # Control buttons
@@ -351,6 +763,17 @@ class TestRailMigratorUI:
                          font=("Arial", 16, "bold"))
         title.pack(pady=10)
         
+        # Project selection status
+        selection_frame = ttk.Frame(reports_frame)
+        selection_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        self.reports_project_label = ttk.Label(selection_frame, text="", 
+                                               font=("Arial", 10, "bold"))
+        self.reports_project_label.pack()
+        
+        # Initial update
+        self.update_reports_project_label()
+        
         # Info
         info = ttk.Label(reports_frame, text="Generate detailed reports of import and export operations",
                         font=("Arial", 10))
@@ -402,8 +825,12 @@ class TestRailMigratorUI:
         self.root.update()
         
         try:
+            # Get selected project ID from migration config
+            migration_config = self.load_migration_config()
+            project_id = migration_config.get('testrail_project_id') if migration_config else None
+            
             from report_generator import MigrationReporter
-            reporter = MigrationReporter()
+            reporter = MigrationReporter(project_id=project_id)
             report = reporter.generate_import_report()
             self.current_report = report
             
@@ -421,8 +848,12 @@ class TestRailMigratorUI:
         self.root.update()
         
         try:
+            # Get selected project ID from migration config
+            migration_config = self.load_migration_config()
+            project_id = migration_config.get('testrail_project_id') if migration_config else None
+            
             from report_generator import MigrationReporter
-            reporter = MigrationReporter()
+            reporter = MigrationReporter(project_id=project_id)
             report = reporter.generate_export_report()
             self.current_report = report
             
@@ -440,8 +871,12 @@ class TestRailMigratorUI:
         self.root.update()
         
         try:
+            # Get selected project ID from migration config
+            migration_config = self.load_migration_config()
+            project_id = migration_config.get('testrail_project_id') if migration_config else None
+            
             from report_generator import MigrationReporter
-            reporter = MigrationReporter()
+            reporter = MigrationReporter(project_id=project_id)
             report = reporter.generate_combined_report()
             self.current_report = report
             
@@ -460,6 +895,13 @@ class TestRailMigratorUI:
         t.insert(tk.END, "IMPORT REPORT\n")
         t.insert(tk.END, "=" * 80 + "\n")
         t.insert(tk.END, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        
+        # Show project filter if active
+        if report.get('filtered_by_project'):
+            t.insert(tk.END, f"Filtered by Project: {report.get('project_name', 'Unknown')} (ID: {report['filtered_by_project']})\n")
+        else:
+            t.insert(tk.END, "Showing: All Projects\n")
+        
         t.insert(tk.END, "=" * 80 + "\n\n")
         
         if report['status'] == 'error':
@@ -553,6 +995,13 @@ class TestRailMigratorUI:
         t.insert(tk.END, "EXPORT REPORT\n")
         t.insert(tk.END, "=" * 80 + "\n")
         t.insert(tk.END, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        
+        # Show project info from migration config
+        migration_config = self.load_migration_config()
+        if migration_config:
+            t.insert(tk.END, f"TestRail Project: {migration_config.get('testrail_project_name', 'Unknown')} (ID: {migration_config.get('testrail_project_id', 'N/A')})\n")
+            t.insert(tk.END, f"Jira Project: {migration_config.get('jira_project_name', 'Unknown')} ({migration_config.get('jira_project_key', 'N/A')})\n")
+        
         t.insert(tk.END, "=" * 80 + "\n\n")
         
         if report['status'] == 'error':
@@ -935,6 +1384,83 @@ class TestRailMigratorUI:
                               f"Connected successfully!\nProject: {project['name']}")
         except Exception as e:
             messagebox.showerror("Connection Failed", f"Failed to connect to Jira:\n{e}")
+    
+    def on_closing(self):
+        """Handle window close event"""
+        if messagebox.askokcancel("Quit", "Do you want to quit?"):
+            self.root.destroy()
+            sys.exit(0)
+    
+    def on_tab_changed(self, event):
+        """Handle tab change event to update project labels"""
+        current_tab = self.notebook.index(self.notebook.select())
+        
+        # Update labels when switching to Import tab (tab 1), Export tab (tab 2), or Reports tab (tab 3)
+        if current_tab == 1:  # Import tab
+            self.update_import_project_labels()
+        elif current_tab == 2:  # Export tab
+            self.update_export_project_labels()
+        elif current_tab == 3:  # Reports tab
+            self.update_reports_project_label()
+    
+    def update_import_project_labels(self):
+        """Update the project selection labels in the Import tab"""
+        migration_config = self.load_migration_config()
+        
+        if migration_config:
+            self.import_testrail_label.config(
+                text=f"✓ TestRail Project: {migration_config.get('testrail_project_name')} (ID: {migration_config.get('testrail_project_id')})",
+                foreground="green"
+            )
+            self.import_jira_label.config(
+                text=f"✓ Jira Project: {migration_config.get('jira_project_name')} ({migration_config.get('jira_project_key')})",
+                foreground="green"
+            )
+            self.import_warning_label.config(text="")
+        else:
+            self.import_testrail_label.config(text="")
+            self.import_jira_label.config(text="")
+            self.import_warning_label.config(
+                text="⚠ No project selection found! Please go to 'Select Projects' tab first.",
+                foreground="orange"
+            )
+    
+    def update_export_project_labels(self):
+        """Update the project selection labels in the Export tab"""
+        migration_config = self.load_migration_config()
+        
+        if migration_config:
+            self.export_testrail_label.config(
+                text=f"✓ TestRail Project: {migration_config.get('testrail_project_name')} (ID: {migration_config.get('testrail_project_id')})",
+                foreground="green"
+            )
+            self.export_jira_label.config(
+                text=f"✓ Jira Project: {migration_config.get('jira_project_name')} ({migration_config.get('jira_project_key')})",
+                foreground="green"
+            )
+            self.export_warning_label.config(text="")
+        else:
+            self.export_testrail_label.config(text="")
+            self.export_jira_label.config(text="")
+            self.export_warning_label.config(
+                text="⚠ No project selection found! Please go to 'Select Projects' tab first.",
+                foreground="orange"
+            )
+    
+    def update_reports_project_label(self):
+        """Update the project selection label in the Reports tab"""
+        migration_config = self.load_migration_config()
+        
+        if migration_config:
+            self.reports_project_label.config(
+                text=f"📊 Reports filtered for: TestRail Project '{migration_config.get('testrail_project_name')}' (ID: {migration_config.get('testrail_project_id')}) → Jira Project '{migration_config.get('jira_project_name')}' ({migration_config.get('jira_project_key')})",
+                foreground="green"
+            )
+        else:
+            self.reports_project_label.config(
+                text="⚠ No project selected - Reports will show data from all projects",
+                foreground="orange"
+            )
 
 
 def main():

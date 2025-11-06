@@ -75,10 +75,11 @@ Edit `config.json` with your credentials:
 
   "jira_url": "https://your-jira-instance.com",
   "jira_username": "your-jira-email@company.com",
-  "jira_password": "your-jira-api-token",
-  "jira_project_key": "TEST"
+  "jira_password": "your-jira-api-token"
 }
 ```
+
+**Note:** The `jira_project_key` is no longer needed in config.json - you'll select the target project in the next step.
 
 ### Getting Jira API Token
 
@@ -89,47 +90,173 @@ For Jira Server/Data Center, you can use your password.
 
 ---
 
-## Step 2: Extract Data from TestRail
+## Step 2: Select Projects
 
-Run the main extraction script to pull all TestRail data into a local SQLite database:
+**NEW:** Run the interactive project selector to choose which TestRail project to import and which Jira project to migrate to:
 
 ```bash
-python main.py
+python3 project_selector.py
+```
+
+This interactive tool will:
+
+1. **List all TestRail projects** - Select which one to import
+2. **List all Jira projects** - Select the target project
+3. **Create new Jira project** (optional) - If you need a new project
+4. **Save configuration** to `migration_config.json`
+
+**Example output:**
+
+```text
+================================================================================
+TESTRAIL TO JIRA/XRAY MIGRATION - PROJECT SELECTION
+================================================================================
+
+📋 Step 1: Select TestRail project to import
+
+--------------------------------------------------------------------------------
+SELECT TESTRAIL PROJECT TO IMPORT
+--------------------------------------------------------------------------------
+
+Available TestRail Projects:
+
+  1. Mobile App Testing (ID: 1) - ✓ Active
+  2. Web Portal Tests (ID: 2) - ✓ Active
+  3. API Test Suite (ID: 3) - ✓ Active
+
+Select project (1-3): 2
+
+✓ Selected: Web Portal Tests
+
+📋 Step 2: Select target Jira project
+
+--------------------------------------------------------------------------------
+SELECT TARGET JIRA PROJECT
+--------------------------------------------------------------------------------
+
+Available Jira Projects:
+
+  1. Mobile Testing (MT)
+  2. Web Testing (WT)
+  3. API Testing (API)
+  4. Create new project
+
+Select project (1-4): 4
+
+--------------------------------------------------------------------------------
+CREATE NEW JIRA PROJECT
+--------------------------------------------------------------------------------
+
+Enter project key (2-10 uppercase letters, e.g., 'MYPROJ'): WEBTEST
+Enter project name: Web Portal Testing
+Enter project description (optional): Migration from TestRail
+
+Project Templates:
+  1. Scrum software development
+  2. Kanban software development
+  3. Basic software development
+
+Select template (1-3) [default: 1]: 1
+
+Creating project 'Web Portal Testing' (WEBTEST)...
+✓ Project created successfully!
+  Key: WEBTEST
+  Name: Web Portal Testing
+
+================================================================================
+MIGRATION CONFIGURATION
+================================================================================
+
+TestRail Project: Web Portal Tests (ID: 2)
+Jira Project:     Web Portal Testing (WEBTEST)
+
+Proceed with this configuration? (y/n): y
+
+✓ Migration configuration saved to 'migration_config.json'
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. Run the importer with the selected TestRail project:
+   python3 importer.py
+
+2. Run the migrator to migrate to the selected Jira project:
+   python3 migrator.py
+
+================================================================================
+```
+
+**Created file:** `migration_config.json`
+
+```json
+{
+  "testrail_project_id": 2,
+  "testrail_project_name": "Web Portal Tests",
+  "jira_project_key": "WEBTEST",
+  "jira_project_name": "Web Portal Testing"
+}
+```
+
+---
+
+## Step 3: Import Data from TestRail
+
+Run the importer script to pull the selected TestRail project data into a local SQLite database:
+
+```bash
+python3 importer.py
 ```
 
 This will:
 
 - Connect to TestRail
-- Fetch all projects, users, test cases, suites, runs, results, etc.
+- Fetch ONLY the selected project's data (users, test cases, suites, runs, results, etc.)
 - Store everything in `testrail.db`
 
 **Output:**
 
-```
+```text
+================================================================================
+IMPORTING SELECTED PROJECT: Web Portal Tests
+Project ID: 2
+================================================================================
+
 ================================================================================
 FETCHING AND STORING TESTRAIL DATA
 ================================================================================
 
-[1/15] Fetching Projects...
-✓ Stored 5 projects
+[1/15] Fetching Selected Project...
+✓ Stored project: Web Portal Tests
 
 [2/15] Fetching Users...
 ✓ Stored 12 users
 
+[3/15] Fetching Case Types...
+✓ Stored 3 case types
+
 ...
 
 ================================================================================
-MIGRATION COMPLETE!
+IMPORT COMPLETE!
 ================================================================================
 
+Database saved to: testrail.db
+Attachments saved to: attachments/
+
 Summary:
-  - Projects: 5
+  - Project: Web Portal Tests (ID: 2)
+  - Target Jira Project: Web Portal Testing (WEBTEST)
   - Users: 12
-  - Suites: 15
-  - Cases: 234
-  - Runs: 45
-  - Tests: 567
-  - Results: 890
+  - Suites: 5
+  - Sections: 23
+  - Cases: 87
+  - Milestones: 3
+  - Plans: 8
+  - Runs: 15
+  - Tests: 145
+  - Results: 298
+  - Attachments: 12
 ```
 
 ---
@@ -162,13 +289,13 @@ Your Jira user needs permissions to:
 
 ## Step 4: Run Migration to Xray
 
-Execute the migrator script:
+Execute the migrator script to migrate to the selected Jira project:
 
 ```bash
-python migrator.py
+python3 migrator.py
 ```
 
-This will:
+This will automatically use the Jira project from `migration_config.json` and:
 
 1. **Migrate Test Cases** → Create Xray Tests
 2. **Migrate Test Suites** → Create Xray Test Sets
@@ -178,37 +305,43 @@ This will:
 
 **Output:**
 
-```
+```text
+================================================================================
+MIGRATING TO JIRA PROJECT: Web Portal Testing
+Project Key: WEBTEST
+From TestRail Project: Web Portal Tests
+================================================================================
+
 ================================================================================
 TESTRAIL TO XRAY MIGRATION
 ================================================================================
 
 Target: https://jira.company.com
-Project: TEST
+Project: WEBTEST
 
 ================================================================================
 
 Connecting to Jira/Xray...
-✓ Connected to project: Test Project
+✓ Connected to project: Web Portal Testing
 
 [1/5] Migrating Test Cases...
   ✓ Migrated 10 test cases...
   ✓ Migrated 20 test cases...
-✓ Migrated 234 test cases
+✓ Migrated 87 test cases
 
 [2/5] Migrating Test Suites as Test Sets...
-✓ Migrated 15 test suites as test sets
+✓ Migrated 5 test suites as test sets
 
 [3/5] Migrating Test Runs as Test Executions...
   ✓ Migrated 5 test runs...
-✓ Migrated 45 test runs as test executions
+✓ Migrated 15 test runs as test executions
 
 [4/5] Migrating Test Results...
-  ✓ Migrated 20 test results...
-✓ Migrated 567 test results
+  ✓ Migrated 50 test results...
+✓ Migrated 145 test results
 
 [5/5] Migrating Milestones as Versions...
-✓ Migrated 8 milestones as versions
+✓ Migrated 3 milestones as versions
 
 ✓ Mapping saved to migration_mapping.json
 
@@ -217,10 +350,10 @@ MIGRATION COMPLETE!
 ================================================================================
 
 Summary:
-  - Test Cases migrated: 234
-  - Test Sets created: 15
-  - Test Executions created: 45
-  - Milestones migrated: 8
+  - Test Cases migrated: 87
+  - Test Sets created: 5
+  - Test Executions created: 15
+  - Milestones migrated: 3
 ```
 
 ---
@@ -353,17 +486,31 @@ To map TestRail custom fields to Jira custom fields, modify the `migrate_test_ca
 
 ## Files Reference
 
-```
+```text
 test-rail-migrator/
-├── config.json              # Configuration file (edit this!)
-├── main.py                  # TestRail data extraction
+├── config.json              # Credentials configuration (edit this!)
+├── project_selector.py      # NEW: Interactive project selection tool
+├── migration_config.json    # Generated project mapping (auto-generated)
+├── importer.py              # Import selected TestRail project
 ├── migrator.py              # Migration to Xray
 ├── testrail.py              # TestRail API client
 ├── testrail.db              # Local SQLite database (auto-generated)
 ├── migration_mapping.json   # ID to Key mapping (auto-generated)
+├── attachments/             # Downloaded attachments (auto-generated)
 ├── XRAY_API_REFERENCE.md    # Complete API documentation
 └── README.md                # This file
 ```
+
+## Multi-Project Workflow
+
+If you have multiple TestRail projects to migrate:
+
+1. Run `python3 project_selector.py` for the first project
+2. Run `python3 importer.py` to import data
+3. Run `python3 migrator.py` to migrate
+4. Repeat steps 1-3 for each additional project
+
+**Note:** Each run of `project_selector.py` will overwrite `migration_config.json`, so complete one full migration before starting the next.
 
 ---
 

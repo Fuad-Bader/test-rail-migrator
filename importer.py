@@ -14,6 +14,26 @@ def print_flush(*args, **kwargs):
 
 with open('config.json') as config_file:
     config = json.load(config_file)
+
+# Load migration configuration
+migration_config = None
+SELECTED_PROJECT_ID = None
+
+try:
+    with open('migration_config.json') as mig_file:
+        migration_config = json.load(mig_file)
+        SELECTED_PROJECT_ID = migration_config.get('testrail_project_id')
+        print_flush("=" * 80)
+        print_flush(f"IMPORTING SELECTED PROJECT: {migration_config.get('testrail_project_name')}")
+        print_flush(f"Project ID: {SELECTED_PROJECT_ID}")
+        print_flush("=" * 80)
+except FileNotFoundError:
+    print_flush("=" * 80)
+    print_flush("⚠ WARNING: migration_config.json not found!")
+    print_flush("Please run 'python3 project_selector.py' first to select projects.")
+    print_flush("=" * 80)
+    sys.exit(1)
+
 db = connect('testrail.db')
 cursor = db.cursor()
 
@@ -21,13 +41,12 @@ client = APIClient(config['testrail_url'])
 client.user = config['testrail_user']
 client.password = config['testrail_password']
 
-print_flush("=" * 80)
+print_flush("\n" + "=" * 80)
 print_flush("FETCHING AND STORING TESTRAIL DATA")
 print_flush("=" * 80)
 
-# 1. PROJECTS
-print_flush("\n[1/15] Fetching Projects...")
-projects = client.send_get('get_projects')['projects']
+# 1. PROJECTS - Only import the selected project
+print_flush("\n[1/15] Fetching Selected Project...")
 cursor.execute('''CREATE TABLE IF NOT EXISTS projects (
     id INTEGER NOT NULL PRIMARY KEY,
     name TEXT,
@@ -41,25 +60,24 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS projects (
     users TEXT, 
     groups TEXT
 )''')
-for project in projects:
-    project_id = project['id']
-    project = client.send_get(f'get_project/{project_id}')
-    cursor.execute('INSERT OR REPLACE INTO projects (id, name, announcement, show_announcement, is_completed, suite_mode, default_role_id, case_statuses_enabled, url, users, groups) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                   (
-                       project['id'], 
-                       project['name'], 
-                       project['announcement'], 
-                       project['show_announcement'], 
-                       project['is_completed'], 
-                       project['suite_mode'], 
-                       project['default_role_id'], 
-                       project['case_statuses_enabled'], 
-                       project['url'],
-                       str(project['users']),
-                       str(project['groups'])
-                    ))
-    db.commit()
-print(f"✓ Stored {len(projects)} projects")
+
+project = client.send_get(f'get_project/{SELECTED_PROJECT_ID}')
+cursor.execute('INSERT OR REPLACE INTO projects (id, name, announcement, show_announcement, is_completed, suite_mode, default_role_id, case_statuses_enabled, url, users, groups) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+               (
+                   project['id'], 
+                   project['name'], 
+                   project['announcement'], 
+                   project['show_announcement'], 
+                   project['is_completed'], 
+                   project['suite_mode'], 
+                   project['default_role_id'], 
+                   project['case_statuses_enabled'], 
+                   project['url'],
+                   str(project['users']),
+                   str(project['groups'])
+                ))
+db.commit()
+print(f"✓ Stored project: {project['name']}")
 
 # 2. USERS
 print("\n[2/15] Fetching Users...")
@@ -177,16 +195,16 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS templates (
     name TEXT,
     is_default INTEGER
 )''')
-for project in projects:
-    try:
-        templates = client.send_get(f'get_templates/{project["id"]}')
-        for template in templates:
-            cursor.execute('INSERT OR REPLACE INTO templates (id, project_id, name, is_default) VALUES (?, ?, ?, ?)',
-                           (template['id'], project['id'], template['name'], template['is_default']))
-        db.commit()
-    except Exception as e:
-        print(f"  Warning: Could not fetch templates for project {project['id']}: {e}")
-print(f"✓ Stored templates")
+try:
+    templates = client.send_get(f'get_templates/{SELECTED_PROJECT_ID}')
+    for template in templates:
+        cursor.execute('INSERT OR REPLACE INTO templates (id, project_id, name, is_default) VALUES (?, ?, ?, ?)',
+                       (template['id'], SELECTED_PROJECT_ID, template['name'], template['is_default']))
+    db.commit()
+    print(f"✓ Stored {len(templates)} templates")
+except Exception as e:
+    print(f"  Warning: Could not fetch templates for project {SELECTED_PROJECT_ID}: {e}")
+    print(f"✓ Stored templates")
 
 # 9. SUITES
 print("\n[9/15] Fetching Suites...")
@@ -202,17 +220,16 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS suites (
     completed_on INTEGER
 )''')
 suite_count = 0
-for project in projects:
-    try:
-        suites = client.send_get(f'get_suites/{project["id"]}')['suites']
-        for suite in suites:
-            cursor.execute('INSERT OR REPLACE INTO suites (id, project_id, name, description, url, is_master, is_baseline, is_completed, completed_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                           (suite['id'], suite['project_id'], suite['name'], suite.get('description'), suite['url'], 
-                            suite['is_master'], suite['is_baseline'], suite['is_completed'], suite.get('completed_on')))
-            suite_count += 1
-        db.commit()
-    except Exception as e:
-        print(f"  Warning: Could not fetch suites for project {project['id']}: {e}")
+try:
+    suites = client.send_get(f'get_suites/{SELECTED_PROJECT_ID}')['suites']
+    for suite in suites:
+        cursor.execute('INSERT OR REPLACE INTO suites (id, project_id, name, description, url, is_master, is_baseline, is_completed, completed_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                       (suite['id'], suite['project_id'], suite['name'], suite.get('description'), suite['url'], 
+                        suite['is_master'], suite['is_baseline'], suite['is_completed'], suite.get('completed_on')))
+        suite_count += 1
+    db.commit()
+except Exception as e:
+    print(f"  Warning: Could not fetch suites for project {SELECTED_PROJECT_ID}: {e}")
 print(f"✓ Stored {suite_count} suites")
 
 # 10. SECTIONS
@@ -227,22 +244,21 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS sections (
     depth INTEGER
 )''')
 section_count = 0
-for project in projects:
-    try:
-        suites = client.send_get(f'get_suites/{project["id"]}')['suites']
-        for suite in suites:
-            try:
-                sections = client.send_get(f'get_sections/{project["id"]}&suite_id={suite["id"]}')['sections']
-                for section in sections:
-                    cursor.execute('INSERT OR REPLACE INTO sections (id, suite_id, name, description, parent_id, display_order, depth) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                                   (section['id'], section['suite_id'], section['name'], section.get('description'), 
-                                    section.get('parent_id'), section['display_order'], section['depth']))
-                    section_count += 1
-                db.commit()
-            except Exception as e:
-                print(f"  Warning: Could not fetch sections for suite {suite['id']}: {e}")
-    except:
-        pass
+try:
+    suites = client.send_get(f'get_suites/{SELECTED_PROJECT_ID}')['suites']
+    for suite in suites:
+        try:
+            sections = client.send_get(f'get_sections/{SELECTED_PROJECT_ID}&suite_id={suite["id"]}')['sections']
+            for section in sections:
+                cursor.execute('INSERT OR REPLACE INTO sections (id, suite_id, name, description, parent_id, display_order, depth) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                               (section['id'], section['suite_id'], section['name'], section.get('description'), 
+                                section.get('parent_id'), section['display_order'], section['depth']))
+                section_count += 1
+            db.commit()
+        except Exception as e:
+            print(f"  Warning: Could not fetch sections for suite {suite['id']}: {e}")
+except:
+    pass
 print(f"✓ Stored {section_count} sections")
 
 # 11. MILESTONES
@@ -262,19 +278,18 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS milestones (
     url TEXT
 )''')
 milestone_count = 0
-for project in projects:
-    try:
-        milestones = client.send_get(f'get_milestones/{project["id"]}')['milestones']
-        for milestone in milestones:
-            cursor.execute('INSERT OR REPLACE INTO milestones (id, project_id, name, description, start_on, started_on, is_started, due_on, is_completed, completed_on, parent_id, url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                           (milestone['id'], milestone['project_id'], milestone['name'], milestone.get('description'), 
-                            milestone.get('start_on'), milestone.get('started_on'), milestone['is_started'], 
-                            milestone.get('due_on'), milestone['is_completed'], milestone.get('completed_on'), 
-                            milestone.get('parent_id'), milestone['url']))
-            milestone_count += 1
-        db.commit()
-    except Exception as e:
-        print(f"  Warning: Could not fetch milestones for project {project['id']}: {e}")
+try:
+    milestones = client.send_get(f'get_milestones/{SELECTED_PROJECT_ID}')['milestones']
+    for milestone in milestones:
+        cursor.execute('INSERT OR REPLACE INTO milestones (id, project_id, name, description, start_on, started_on, is_started, due_on, is_completed, completed_on, parent_id, url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                       (milestone['id'], milestone['project_id'], milestone['name'], milestone.get('description'), 
+                        milestone.get('start_on'), milestone.get('started_on'), milestone['is_started'], 
+                        milestone.get('due_on'), milestone['is_completed'], milestone.get('completed_on'), 
+                        milestone.get('parent_id'), milestone['url']))
+        milestone_count += 1
+    db.commit()
+except Exception as e:
+    print(f"  Warning: Could not fetch milestones for project {SELECTED_PROJECT_ID}: {e}")
 print(f"✓ Stored {milestone_count} milestones")
 
 # 12. CASES (Test Cases)
@@ -298,27 +313,26 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS cases (
     custom_fields TEXT
 )''')
 case_count = 0
-for project in projects:
-    try:
-        suites = client.send_get(f'get_suites/{project["id"]}')['suites']
-        for suite in suites:
-            try:
-                cases = client.send_get(f'get_cases/{project["id"]}&suite_id={suite["id"]}')['cases']
-                for case in cases:
-                    # Extract custom fields
-                    custom_fields = {k: v for k, v in case.items() if k.startswith('custom_')}
-                    cursor.execute('INSERT OR REPLACE INTO cases (id, title, section_id, template_id, type_id, priority_id, milestone_id, refs, created_by, created_on, updated_by, updated_on, estimate, estimate_forecast, suite_id, custom_fields) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                                   (case['id'], case['title'], case['section_id'], case['template_id'], 
-                                    case['type_id'], case['priority_id'], case.get('milestone_id'), case.get('refs'), 
-                                    case['created_by'], case['created_on'], case['updated_by'], case['updated_on'], 
-                                    case.get('estimate'), case.get('estimate_forecast'), case['suite_id'], 
-                                    str(custom_fields)))
-                    case_count += 1
-                db.commit()
-            except Exception as e:
-                print(f"  Warning: Could not fetch cases for suite {suite['id']}: {e}")
-    except:
-        pass
+try:
+    suites = client.send_get(f'get_suites/{SELECTED_PROJECT_ID}')['suites']
+    for suite in suites:
+        try:
+            cases = client.send_get(f'get_cases/{SELECTED_PROJECT_ID}&suite_id={suite["id"]}')['cases']
+            for case in cases:
+                # Extract custom fields
+                custom_fields = {k: v for k, v in case.items() if k.startswith('custom_')}
+                cursor.execute('INSERT OR REPLACE INTO cases (id, title, section_id, template_id, type_id, priority_id, milestone_id, refs, created_by, created_on, updated_by, updated_on, estimate, estimate_forecast, suite_id, custom_fields) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                               (case['id'], case['title'], case['section_id'], case['template_id'], 
+                                case['type_id'], case['priority_id'], case.get('milestone_id'), case.get('refs'), 
+                                case['created_by'], case['created_on'], case['updated_by'], case['updated_on'], 
+                                case.get('estimate'), case.get('estimate_forecast'), case['suite_id'], 
+                                str(custom_fields)))
+                case_count += 1
+            db.commit()
+        except Exception as e:
+            print(f"  Warning: Could not fetch cases for suite {suite['id']}: {e}")
+except:
+    pass
 print(f"✓ Stored {case_count} cases")
 
 # 13. PLANS
@@ -338,21 +352,20 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS plans (
     entries TEXT
 )''')
 plan_count = 0
-for project in projects:
-    try:
-        plans = client.send_get(f'get_plans/{project["id"]}')['plans']
-        for plan in plans:
-            plan_details = client.send_get(f'get_plan/{plan["id"]}')
-            cursor.execute('INSERT OR REPLACE INTO plans (id, project_id, name, description, milestone_id, assignedto_id, is_completed, completed_on, created_by, created_on, url, entries) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                           (plan_details['id'], plan_details['project_id'], plan_details['name'], 
-                            plan_details.get('description'), plan_details.get('milestone_id'), 
-                            plan_details.get('assignedto_id'), plan_details['is_completed'], 
-                            plan_details.get('completed_on'), plan_details['created_by'], 
-                            plan_details['created_on'], plan_details['url'], str(plan_details.get('entries'))))
-            plan_count += 1
-        db.commit()
-    except Exception as e:
-        print(f"  Warning: Could not fetch plans for project {project['id']}: {e}")
+try:
+    plans = client.send_get(f'get_plans/{SELECTED_PROJECT_ID}')['plans']
+    for plan in plans:
+        plan_details = client.send_get(f'get_plan/{plan["id"]}')
+        cursor.execute('INSERT OR REPLACE INTO plans (id, project_id, name, description, milestone_id, assignedto_id, is_completed, completed_on, created_by, created_on, url, entries) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                       (plan_details['id'], plan_details['project_id'], plan_details['name'], 
+                        plan_details.get('description'), plan_details.get('milestone_id'), 
+                        plan_details.get('assignedto_id'), plan_details['is_completed'], 
+                        plan_details.get('completed_on'), plan_details['created_by'], 
+                        plan_details['created_on'], plan_details['url'], str(plan_details.get('entries'))))
+        plan_count += 1
+    db.commit()
+except Exception as e:
+    print(f"  Warning: Could not fetch plans for project {SELECTED_PROJECT_ID}: {e}")
 print(f"✓ Stored {plan_count} plans")
 
 # 14. RUNS
@@ -388,24 +401,23 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS runs (
     url TEXT
 )''')
 run_count = 0
-for project in projects:
-    try:
-        runs = client.send_get(f'get_runs/{project["id"]}')['runs']
-        for run in runs:
-            cursor.execute('INSERT OR REPLACE INTO runs (id, suite_id, project_id, plan_id, name, description, milestone_id, assignedto_id, include_all, is_completed, completed_on, config, config_ids, passed_count, blocked_count, untested_count, retest_count, failed_count, custom_status1_count, custom_status2_count, custom_status3_count, custom_status4_count, custom_status5_count, custom_status6_count, custom_status7_count, created_by, created_on, url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                           (run['id'], run.get('suite_id'), run['project_id'], run.get('plan_id'), run['name'], 
-                            run.get('description'), run.get('milestone_id'), run.get('assignedto_id'), 
-                            run['include_all'], run['is_completed'], run.get('completed_on'), run.get('config'), 
-                            str(run.get('config_ids')), run['passed_count'], run['blocked_count'], 
-                            run['untested_count'], run['retest_count'], run['failed_count'], 
-                            run.get('custom_status1_count'), run.get('custom_status2_count'), 
-                            run.get('custom_status3_count'), run.get('custom_status4_count'), 
-                            run.get('custom_status5_count'), run.get('custom_status6_count'), 
-                            run.get('custom_status7_count'), run['created_by'], run['created_on'], run['url']))
-            run_count += 1
-        db.commit()
-    except Exception as e:
-        print(f"  Warning: Could not fetch runs for project {project['id']}: {e}")
+try:
+    runs = client.send_get(f'get_runs/{SELECTED_PROJECT_ID}')['runs']
+    for run in runs:
+        cursor.execute('INSERT OR REPLACE INTO runs (id, suite_id, project_id, plan_id, name, description, milestone_id, assignedto_id, include_all, is_completed, completed_on, config, config_ids, passed_count, blocked_count, untested_count, retest_count, failed_count, custom_status1_count, custom_status2_count, custom_status3_count, custom_status4_count, custom_status5_count, custom_status6_count, custom_status7_count, created_by, created_on, url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                       (run['id'], run.get('suite_id'), run['project_id'], run.get('plan_id'), run['name'], 
+                        run.get('description'), run.get('milestone_id'), run.get('assignedto_id'), 
+                        run['include_all'], run['is_completed'], run.get('completed_on'), run.get('config'), 
+                        str(run.get('config_ids')), run['passed_count'], run['blocked_count'], 
+                        run['untested_count'], run['retest_count'], run['failed_count'], 
+                        run.get('custom_status1_count'), run.get('custom_status2_count'), 
+                        run.get('custom_status3_count'), run.get('custom_status4_count'), 
+                        run.get('custom_status5_count'), run.get('custom_status6_count'), 
+                        run.get('custom_status7_count'), run['created_by'], run['created_on'], run['url']))
+        run_count += 1
+    db.commit()
+except Exception as e:
+    print(f"  Warning: Could not fetch runs for project {SELECTED_PROJECT_ID}: {e}")
 print(f"✓ Stored {run_count} runs")
 
 # 15. TESTS
@@ -427,26 +439,25 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS tests (
     custom_fields TEXT
 )''')
 test_count = 0
-for project in projects:
-    try:
-        runs = client.send_get(f'get_runs/{project["id"]}')['runs']
-        for run in runs:
-            try:
-                tests = client.send_get(f'get_tests/{run["id"]}')['tests']
-                for test in tests:
-                    custom_fields = {k: v for k, v in test.items() if k.startswith('custom_')}
-                    cursor.execute('INSERT OR REPLACE INTO tests (id, case_id, run_id, status_id, assignedto_id, priority_id, type_id, milestone_id, refs, title, template_id, estimate, estimate_forecast, custom_fields) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                                   (test['id'], test['case_id'], test['run_id'], test['status_id'], 
-                                    test.get('assignedto_id'), test['priority_id'], test['type_id'], 
-                                    test.get('milestone_id'), test.get('refs'), test['title'], 
-                                    test['template_id'], test.get('estimate'), test.get('estimate_forecast'), 
-                                    str(custom_fields)))    
-                    test_count += 1
-                db.commit()
-            except Exception as e:
-                print(f"  Warning: Could not fetch tests for run {run['id']}: {e}")
-    except:
-        pass
+try:
+    runs = client.send_get(f'get_runs/{SELECTED_PROJECT_ID}')['runs']
+    for run in runs:
+        try:
+            tests = client.send_get(f'get_tests/{run["id"]}')['tests']
+            for test in tests:
+                custom_fields = {k: v for k, v in test.items() if k.startswith('custom_')}
+                cursor.execute('INSERT OR REPLACE INTO tests (id, case_id, run_id, status_id, assignedto_id, priority_id, type_id, milestone_id, refs, title, template_id, estimate, estimate_forecast, custom_fields) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                               (test['id'], test['case_id'], test['run_id'], test['status_id'], 
+                                test.get('assignedto_id'), test['priority_id'], test['type_id'], 
+                                test.get('milestone_id'), test.get('refs'), test['title'], 
+                                test['template_id'], test.get('estimate'), test.get('estimate_forecast'), 
+                                str(custom_fields)))    
+                test_count += 1
+            db.commit()
+        except Exception as e:
+            print(f"  Warning: Could not fetch tests for run {run['id']}: {e}")
+except:
+    pass
 print(f"✓ Stored {test_count} tests")
 
 
@@ -465,30 +476,29 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS results (
     custom_fields TEXT
 )''')
 result_count = 0
-for project in projects:
-    try:
-        runs = client.send_get(f'get_runs/{project["id"]}')['runs']
-        for run in runs:
-            try:
-                tests = client.send_get(f'get_tests/{run["id"]}')['tests']
-                for test in tests:
-                    try:
-                        results = client.send_get(f'get_results/{test["id"]}')['results']
-                        for result in results:
-                            custom_fields = {k: v for k, v in result.items() if k.startswith('custom_')}
-                            cursor.execute('INSERT OR REPLACE INTO results (id, test_id, status_id, created_by, created_on, assignedto_id, comment, version, elapsed, defects, custom_fields) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                                           (result['id'], result['test_id'], result['status_id'], 
-                                            result['created_by'], result['created_on'], result.get('assignedto_id'), 
-                                            result.get('comment'), result.get('version'), result.get('elapsed'), 
-                                            result.get('defects'), str(custom_fields)))
-                            result_count += 1
-                        db.commit()
-                    except Exception as e:
-                        pass  # Skip individual test results that fail
-            except:
-                pass
-    except:
-        pass
+try:
+    runs = client.send_get(f'get_runs/{SELECTED_PROJECT_ID}')['runs']
+    for run in runs:
+        try:
+            tests = client.send_get(f'get_tests/{run["id"]}')['tests']
+            for test in tests:
+                try:
+                    results = client.send_get(f'get_results/{test["id"]}')['results']
+                    for result in results:
+                        custom_fields = {k: v for k, v in result.items() if k.startswith('custom_')}
+                        cursor.execute('INSERT OR REPLACE INTO results (id, test_id, status_id, created_by, created_on, assignedto_id, comment, version, elapsed, defects, custom_fields) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                       (result['id'], result['test_id'], result['status_id'], 
+                                        result['created_by'], result['created_on'], result.get('assignedto_id'), 
+                                        result.get('comment'), result.get('version'), result.get('elapsed'), 
+                                        result.get('defects'), str(custom_fields)))
+                        result_count += 1
+                    db.commit()
+                except Exception as e:
+                    pass  # Skip individual test results that fail
+        except:
+            pass
+except:
+    pass
 print(f"✓ Stored {result_count} results")
 
 # 15. ATTACHMENTS
@@ -514,16 +524,14 @@ attachment_count = 0
 
 # Get attachments for test cases
 print("  Fetching case attachments...")
-for project in projects:
-    try:
-        suites_response = client.send_get(f'get_suites/{project["id"]}')
-        if not suites_response:
-            continue
+try:
+    suites_response = client.send_get(f'get_suites/{SELECTED_PROJECT_ID}')
+    if suites_response:
         suites = suites_response if isinstance(suites_response, list) else suites_response.get('suites', [])
         
         for suite in suites:
             try:
-                cases_response = client.send_get(f'get_cases/{project["id"]}&suite_id={suite["id"]}')
+                cases_response = client.send_get(f'get_cases/{SELECTED_PROJECT_ID}&suite_id={suite["id"]}')
                 if not cases_response:
                     continue
                 cases = cases_response if isinstance(cases_response, list) else cases_response.get('cases', [])
@@ -575,89 +583,108 @@ for project in projects:
                         pass
             except:
                 pass
-    except:
-        pass
+except Exception as e:
+    print(f"  Warning: Could not fetch case attachments: {e}")
 
 # Get attachments for test results
 print("  Fetching result attachments...")
-for project in projects:
-    try:
-        runs = client.send_get(f'get_runs/{project["id"]}')['runs']
-        for run in runs:
-            try:
-                tests_response = client.send_get(f'get_tests/{run["id"]}')
-                if not tests_response:
-                    continue
-                tests = tests_response if isinstance(tests_response, list) else tests_response.get('tests', [])
-                
-                for test in tests:
-                    try:
-                        results_response = client.send_get(f'get_results/{test["id"]}')
-                        if not results_response:
-                            continue
-                        results = results_response if isinstance(results_response, list) else results_response.get('results', [])
-                        
-                        for result in results:
-                            try:
-                                attachments = client.send_get(f'get_attachments_for_test/{result["id"]}&result_id={result["id"]}')
-                                if attachments and 'attachments' in attachments:
-                                    for attachment in attachments['attachments']:
-                                        try:
-                                            # Check if already exists to avoid duplicates
-                                            cursor.execute('SELECT id FROM attachments WHERE id = ? AND entity_type = ? AND entity_id = ?',
-                                                           (attachment['id'], 'result', result['id']))
-                                            if cursor.fetchone():
-                                                print(f"    Skipping duplicate: {attachment['filename']}")
-                                                continue
+result_attachment_count = 0
+try:
+    runs = client.send_get(f'get_runs/{SELECTED_PROJECT_ID}')['runs']
+    print(f"  Checking {len(runs)} runs for result attachments...")
+    for run_idx, run in enumerate(runs, 1):
+        try:
+            print(f"  Processing run {run_idx}/{len(runs)}: {run['name']} (ID: {run['id']})")
+            tests_response = client.send_get(f'get_tests/{run["id"]}')
+            if not tests_response:
+                continue
+            tests = tests_response if isinstance(tests_response, list) else tests_response.get('tests', [])
+            
+            for test in tests:
+                try:
+                    results_response = client.send_get(f'get_results/{test["id"]}')
+                    if not results_response:
+                        continue
+                    results = results_response if isinstance(results_response, list) else results_response.get('results', [])
+                    
+                    for result in results:
+                        try:
+                            # Get attachments for this test (they're associated with results through the test)
+                            attachments = client.send_get(f'get_attachments_for_test/{test["id"]}')
+                            if attachments and 'attachments' in attachments:
+                                for attachment in attachments['attachments']:
+                                    try:
+                                        # Check if attachment belongs to this specific result
+                                        # Attachments for results show up under the test's attachments
+                                        # We store them associated with the result
+                                        
+                                        # Check if already exists to avoid duplicates
+                                        cursor.execute('SELECT id FROM attachments WHERE id = ? AND entity_type = ? AND entity_id = ?',
+                                                       (attachment['id'], 'result', result['id']))
+                                        if cursor.fetchone():
+                                            continue
+                                        
+                                        # Download attachment
+                                        attachment_url = f"{config['testrail_url']}index.php?/attachments/get/{attachment['id']}"
+                                        local_filename = f"{attachments_dir}/result_{result['id']}_{attachment['filename']}"
+                                        
+                                        print(f"    Downloading result attachment: {attachment['filename']} (ID: {attachment['id']}) for result {result['id']}")
+                                        
+                                        # Download file using TestRail API
+                                        # The get_attachment endpoint takes a filepath and saves directly to it
+                                        # It returns the filepath on success or error message on failure
+                                        result_path = client.send_get(f"get_attachment/{attachment['id']}", local_filename)
+                                        
+                                        # Verify file was written successfully
+                                        if result_path == local_filename and os.path.exists(local_filename) and os.path.getsize(local_filename) > 0:
+                                            print(f"    ✓ Successfully downloaded: {attachment['filename']} ({os.path.getsize(local_filename)} bytes)")
+                                            # Store in database
+                                            cursor.execute(
+                                                'INSERT OR REPLACE INTO attachments (id, entity_type, entity_id, filename, size, created_on, user_id, url, local_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                                (attachment['id'], 'result', result['id'], attachment['filename'], 
+                                                 attachment.get('size'), attachment.get('created_on'), 
+                                                 attachment.get('user_id'), attachment_url, local_filename)
+                                            )
+                                            attachment_count += 1
+                                            result_attachment_count += 1
                                             
-                                            # Download attachment
-                                            attachment_url = f"{config['testrail_url']}index.php?/attachments/get/{attachment['id']}"
-                                            local_filename = f"{attachments_dir}/result_{result['id']}_{attachment['filename']}"
+                                            if attachment_count % 10 == 0:
+                                                print(f"    Downloaded {attachment_count} attachments total ({result_attachment_count} from results)...")
+                                                db.commit()
+                                        else:
+                                            print(f"    ❌ Failed to download: {attachment['filename']}")
+                                            print(f"       Expected path: {local_filename}")
+                                            print(f"       API returned: {result_path}")
+                                            print(f"       File exists: {os.path.exists(local_filename)}")
+                                            if os.path.exists(local_filename):
+                                                print(f"       File size: {os.path.getsize(local_filename)} bytes")
                                             
-                                            # Download file using TestRail API
-                                            # The get_attachment endpoint takes a filepath and saves directly to it
-                                            # It returns the filepath on success or error message on failure
-                                            result_path = client.send_get(f"get_attachment/{attachment['id']}", local_filename)
-                                            
-                                            # Verify file was written successfully
-                                            if result_path == local_filename and os.path.exists(local_filename) and os.path.getsize(local_filename) > 0:
-                                                # Store in database
-                                                cursor.execute(
-                                                    'INSERT OR REPLACE INTO attachments (id, entity_type, entity_id, filename, size, created_on, user_id, url, local_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                                                    (attachment['id'], 'result', result['id'], attachment['filename'], 
-                                                     attachment.get('size'), attachment.get('created_on'), 
-                                                     attachment.get('user_id'), attachment_url, local_filename)
-                                                )
-                                                attachment_count += 1
-                                                
-                                                if attachment_count % 10 == 0:
-                                                    print(f"    Downloaded {attachment_count} attachments...")
-                                                    db.commit()
-                                            else:
-                                                print(f"    Warning: Failed to download file: {attachment['filename']} - {result_path}")
-                                                
-                                        except Exception as e:
-                                            print(f"    Warning: Could not download attachment {attachment['id']}: {e}")
-                                            traceback.print_exc()
-                            except:
-                                pass
-                    except:
-                        pass
-            except:
-                pass
-    except:
-        pass
+                                    except Exception as e:
+                                        print(f"    ❌ Error downloading attachment {attachment['id']} ({attachment['filename']}): {e}")
+                                        traceback.print_exc()
+                        except Exception as e:
+                            print(f"    Warning: Error getting attachments for test {test.get('id', 'unknown')}: {e}")
+                except:
+                    pass
+        except:
+            pass
+except Exception as e:
+    print(f"  Warning: Could not fetch result attachments: {e}")
+    traceback.print_exc()
 
 db.commit()
-print(f"✓ Stored and downloaded {attachment_count} attachments")
+print(f"✓ Stored and downloaded {attachment_count} attachments total")
+print(f"  - From test cases: {attachment_count - result_attachment_count}")
+print(f"  - From test results: {result_attachment_count}")
 
 print("\n" + "=" * 80)
-print("MIGRATION COMPLETE!")
+print("IMPORT COMPLETE!")
 print("=" * 80)
 print(f"\nDatabase saved to: testrail.db")
 print(f"Attachments saved to: {attachments_dir}/")
 print("\nSummary:")
-print(f"  - Projects: {len(projects)}")
+print(f"  - Project: {migration_config.get('testrail_project_name')} (ID: {SELECTED_PROJECT_ID})")
+print(f"  - Target Jira Project: {migration_config.get('jira_project_name')} ({migration_config.get('jira_project_key')})")
 print(f"  - Users: {len(users)}")
 print(f"  - Suites: {suite_count}")
 print(f"  - Sections: {section_count}")

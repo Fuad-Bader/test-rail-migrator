@@ -14,9 +14,10 @@ from datetime import datetime
 class MigrationReporter:
     """Generate detailed migration reports"""
     
-    def __init__(self, db_path='testrail.db', mapping_path='migration_mapping.json'):
+    def __init__(self, db_path='testrail.db', mapping_path='migration_mapping.json', project_id=None):
         self.db_path = db_path
         self.mapping_path = mapping_path
+        self.project_id = project_id
     
     def generate_import_report(self):
         """Generate detailed import report from database"""
@@ -65,9 +66,20 @@ class MigrationReporter:
         # Get specific entity counts for summary
         entity_counts = {}
         
+        # Add project filter info if specified
+        if self.project_id:
+            report['filtered_by_project'] = self.project_id
+            cursor.execute('SELECT name FROM projects WHERE id = ?', (self.project_id,))
+            project_row = cursor.fetchone()
+            if project_row:
+                report['project_name'] = project_row[0]
+        
         # Projects
         if 'projects' in report['details']:
-            cursor.execute('SELECT id, name FROM projects')
+            if self.project_id:
+                cursor.execute('SELECT id, name FROM projects WHERE id = ?', (self.project_id,))
+            else:
+                cursor.execute('SELECT id, name FROM projects')
             projects = cursor.fetchall()
             entity_counts['projects'] = {
                 'count': len(projects),
@@ -85,7 +97,10 @@ class MigrationReporter:
         
         # Test Suites
         if 'suites' in report['details']:
-            cursor.execute('SELECT id, name, project_id FROM suites')
+            if self.project_id:
+                cursor.execute('SELECT id, name, project_id FROM suites WHERE project_id = ?', (self.project_id,))
+            else:
+                cursor.execute('SELECT id, name, project_id FROM suites')
             suites = cursor.fetchall()
             entity_counts['suites'] = {
                 'count': len(suites),
@@ -102,28 +117,69 @@ class MigrationReporter:
         
         # Test Cases
         if 'cases' in report['details']:
-            cursor.execute('SELECT priority_id, COUNT(*) FROM cases GROUP BY priority_id')
-            priority_breakdown = {row[0]: row[1] for row in cursor.fetchall()}
-            
-            cursor.execute('SELECT type_id, COUNT(*) FROM cases GROUP BY type_id')
-            type_breakdown = {row[0]: row[1] for row in cursor.fetchall()}
+            if self.project_id:
+                # Filter cases by project through suites
+                cursor.execute('''
+                    SELECT c.priority_id, COUNT(*) 
+                    FROM cases c 
+                    JOIN suites s ON c.suite_id = s.id 
+                    WHERE s.project_id = ? 
+                    GROUP BY c.priority_id
+                ''', (self.project_id,))
+                priority_breakdown = {row[0]: row[1] for row in cursor.fetchall()}
+                
+                cursor.execute('''
+                    SELECT c.type_id, COUNT(*) 
+                    FROM cases c 
+                    JOIN suites s ON c.suite_id = s.id 
+                    WHERE s.project_id = ? 
+                    GROUP BY c.type_id
+                ''', (self.project_id,))
+                type_breakdown = {row[0]: row[1] for row in cursor.fetchall()}
+                
+                cursor.execute('''
+                    SELECT COUNT(*) 
+                    FROM cases c 
+                    JOIN suites s ON c.suite_id = s.id 
+                    WHERE s.project_id = ?
+                ''', (self.project_id,))
+                case_count = cursor.fetchone()[0]
+            else:
+                cursor.execute('SELECT priority_id, COUNT(*) FROM cases GROUP BY priority_id')
+                priority_breakdown = {row[0]: row[1] for row in cursor.fetchall()}
+                
+                cursor.execute('SELECT type_id, COUNT(*) FROM cases GROUP BY type_id')
+                type_breakdown = {row[0]: row[1] for row in cursor.fetchall()}
+                
+                case_count = report['details']['cases']['count']
             
             entity_counts['cases'] = {
-                'count': report['details']['cases']['count'],
+                'count': case_count,
                 'by_priority': priority_breakdown,
                 'by_type': type_breakdown
             }
         
         # Test Runs
         if 'runs' in report['details']:
-            cursor.execute('SELECT is_completed, COUNT(*) FROM runs GROUP BY is_completed')
-            status_breakdown = {}
-            for row in cursor.fetchall():
-                status = 'completed' if row[0] == 1 else 'active'
-                status_breakdown[status] = row[1]
+            if self.project_id:
+                cursor.execute('SELECT is_completed, COUNT(*) FROM runs WHERE project_id = ? GROUP BY is_completed', (self.project_id,))
+                status_breakdown = {}
+                for row in cursor.fetchall():
+                    status = 'completed' if row[0] == 1 else 'active'
+                    status_breakdown[status] = row[1]
+                
+                cursor.execute('SELECT COUNT(*) FROM runs WHERE project_id = ?', (self.project_id,))
+                run_count = cursor.fetchone()[0]
+            else:
+                cursor.execute('SELECT is_completed, COUNT(*) FROM runs GROUP BY is_completed')
+                status_breakdown = {}
+                for row in cursor.fetchall():
+                    status = 'completed' if row[0] == 1 else 'active'
+                    status_breakdown[status] = row[1]
+                run_count = report['details']['runs']['count']
             
             entity_counts['runs'] = {
-                'count': report['details']['runs']['count'],
+                'count': run_count,
                 'by_status': status_breakdown
             }
         
@@ -139,14 +195,25 @@ class MigrationReporter:
         
         # Milestones
         if 'milestones' in report['details']:
-            cursor.execute('SELECT is_completed, COUNT(*) FROM milestones GROUP BY is_completed')
-            status_breakdown = {}
-            for row in cursor.fetchall():
-                status = 'completed' if row[0] == 1 else 'active'
-                status_breakdown[status] = row[1]
+            if self.project_id:
+                cursor.execute('SELECT is_completed, COUNT(*) FROM milestones WHERE project_id = ? GROUP BY is_completed', (self.project_id,))
+                status_breakdown = {}
+                for row in cursor.fetchall():
+                    status = 'completed' if row[0] == 1 else 'active'
+                    status_breakdown[status] = row[1]
+                
+                cursor.execute('SELECT COUNT(*) FROM milestones WHERE project_id = ?', (self.project_id,))
+                milestone_count = cursor.fetchone()[0]
+            else:
+                cursor.execute('SELECT is_completed, COUNT(*) FROM milestones GROUP BY is_completed')
+                status_breakdown = {}
+                for row in cursor.fetchall():
+                    status = 'completed' if row[0] == 1 else 'active'
+                    status_breakdown[status] = row[1]
+                milestone_count = report['details']['milestones']['count']
             
             entity_counts['milestones'] = {
-                'count': report['details']['milestones']['count'],
+                'count': milestone_count,
                 'by_status': status_breakdown
             }
         

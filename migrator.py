@@ -25,11 +25,31 @@ import os
 with open('config.json') as config_file:
     config = json.load(config_file)
 
+# Load migration configuration
+migration_config = None
+try:
+    with open('migration_config.json') as mig_file:
+        migration_config = json.load(mig_file)
+        print(f"\n{'=' * 80}")
+        print(f"MIGRATING TO JIRA PROJECT: {migration_config.get('jira_project_name')}")
+        print(f"Project Key: {migration_config.get('jira_project_key')}")
+        print(f"From TestRail Project: {migration_config.get('testrail_project_name')}")
+        print(f"{'=' * 80}\n")
+except FileNotFoundError:
+    # Only exit if running as main script (not imported by UI)
+    if __name__ == '__main__':
+        print(f"\n{'=' * 80}")
+        print("⚠ WARNING: migration_config.json not found!")
+        print("Please run 'python3 project_selector.py' first to select projects.")
+        print(f"{'=' * 80}\n")
+        import sys
+        sys.exit(1)
+
 # Jira/Xray Configuration
 JIRA_URL = config.get('jira_url')
 JIRA_USERNAME = config.get('jira_username')
 JIRA_PASSWORD = config.get('jira_password')
-JIRA_PROJECT_KEY = config.get('jira_project_key')
+JIRA_PROJECT_KEY = migration_config.get('jira_project_key') if migration_config else config.get('jira_project_key')
 
 # Database
 DB_PATH = 'testrail.db'
@@ -112,9 +132,9 @@ class JiraXrayClient:
                 print(f"  Response: {e.response.text[:500]}")
             raise
     
-    def _make_xray_request(self, method, endpoint, data=None):
+    def _make_xray_request(self, method, endpoint, data=None, api_version='2.0'):
         """Make HTTP request to Xray API"""
-        url = f"{self.base_url}/rest/raven/1.0/{endpoint}"
+        url = f"{self.base_url}/rest/raven/{api_version}/{endpoint}"
         
         try:
             # Use auth only if not using Bearer token (it's in headers)
@@ -264,22 +284,25 @@ class JiraXrayClient:
         return test
     
     def update_test_steps(self, test_key, steps):
-        """Update test steps for a Test issue"""
-        # Xray REST API endpoint for test steps
-        steps_data = []
-        for idx, step in enumerate(steps, 1):
-            step_obj = {
-                'index': idx,
-                'step': step.get('action', ''),
-                'data': step.get('data', ''),
-                'result': step.get('expected', '')
-            }
-            steps_data.append(step_obj)
-        
+        """Update test steps for a Test issue using Xray v2 API"""
+        # Xray v2 API: POST each step individually to /rest/raven/2.0/api/test/{testKey}/steps
         try:
-            return self._make_xray_request('PUT', f'api/testrun/{test_key}/step', data=steps_data)
+            # Post each step individually - v2 API doesn't support bulk updates
+            for step in steps:
+                step_payload = {
+                    'fields': {
+                        'Action': step.get('action', ''),
+                        'Data': step.get('data', ''),
+                        'Expected Result': step.get('expected', '')
+                    }
+                }
+                # POST individual step to the test
+                self._make_xray_request('POST', f'api/test/{test_key}/steps', data=step_payload, api_version='2.0')
+            
+            return True
         except Exception as e:
             print(f"  Warning: Could not update test steps for {test_key}: {e}")
+            return None
     
     def create_test_set(self, project_key, summary, description=None, tests=None):
         """Create a Test Set issue in Xray"""
@@ -305,7 +328,7 @@ class JiraXrayClient:
         """Add tests to a test set"""
         try:
             data = {'add': test_keys}
-            return self._make_xray_request('POST', f'api/testset/{test_set_key}/test', data=data)
+            return self._make_xray_request('POST', f'api/testset/{test_set_key}/test', data=data, api_version='1.0')
         except Exception as e:
             print(f"  Warning: Could not add tests to test set {test_set_key}: {e}")
     
@@ -333,43 +356,53 @@ class JiraXrayClient:
         """Add tests to a test execution"""
         try:
             data = {'add': test_keys}
-            return self._make_xray_request('POST', f'api/testexec/{test_execution_key}/test', data=data)
+            return self._make_xray_request('POST', f'api/testexec/{test_execution_key}/test', data=data, api_version='1.0')
         except Exception as e:
             print(f"  Warning: Could not add tests to execution {test_execution_key}: {e}")
     
     def update_test_execution_status(self, test_execution_key, test_key, status, comment=None, 
                                      defects=None, evidence=None):
-        """Update the status of a test within a test execution"""
-        data = {
-            'status': status  # e.g., 'PASS', 'FAIL', 'EXECUTING', 'TODO', 'ABORTED'
-        }
-        
-        if comment:
-            data['comment'] = comment
-        
-        if defects:
-            data['defects'] = defects  # List of defect keys
-        
+        """Update the status of a test within a test execution using v2 TestRun API"""
         try:
-            # Try Xray 8.x API first (different base path)
-            url = f"{self.base_url}/rest/tests-1.0/testexec/{test_execution_key}/test/{test_key}/status"
+            # Step 1: Get the test run ID from the test execution
+            # Use v1 API to get list of tests in execution with their test run IDs
+            url = f"{self.base_url}/rest/raven/1.0/api/testexec/{test_execution_key}/test"
             auth_param = None if self.is_token else self.auth
             
-            response = requests.post(url, auth=auth_param, headers=self.headers, json=data)
+            response = requests.get(url, auth=auth_param, headers=self.headers)
             response.raise_for_status()
-            time.sleep(RATE_LIMIT_DELAY)
             
-            if response.text and not response.text.startswith('<!DOCTYPE'):
-                return response.json() if response.text else {}
-            return {}
+            tests_in_exec = response.json()
+            
+            # Find the test run ID for our specific test
+            testrun_id = None
+            for test in tests_in_exec:
+                if test.get('key') == test_key:
+                    testrun_id = test.get('id')
+                    break
+            
+            if not testrun_id:
+                raise Exception(f"Test {test_key} not found in execution {test_execution_key}")
+            
+            # Step 2: Update the test run status using v2 API
+            data = {
+                'status': status  # e.g., 'PASS', 'FAIL', 'EXECUTING', 'TODO', 'ABORTED'
+            }
+            
+            if comment:
+                data['comment'] = comment
+            
+            # Note: v2 TestRun API doesn't support defects field in this format
+            # Defects would need to be linked separately using Jira issue links
+            # if defects and len(defects) > 0:
+            #     data['defects'] = defects
+            
+            # Use v2 TestRun API to update
+            return self._make_xray_request('PUT', f'api/testrun/{testrun_id}', data=data, api_version='2.0')
+            
         except Exception as e:
-            # Fallback to old API
-            try:
-                return self._make_xray_request('POST', 
-                    f'api/testexec/{test_execution_key}/test/{test_key}/status', 
-                    data=data)
-            except Exception as e2:
-                print(f"  Warning: Could not update test status: {e2}")
+            print(f"  Warning: Could not update test status: {e}")
+            return None
     
     def create_precondition(self, project_key, summary, description=None):
         """Create a Precondition issue"""
@@ -420,13 +453,28 @@ def migrate_test_cases(client, project_key, mapping):
     db = get_db_connection()
     cursor = db.cursor()
     
-    # Get all test cases
-    cursor.execute('''
-        SELECT c.*, s.name as section_name, p.name as priority_name
-        FROM cases c
-        LEFT JOIN sections s ON c.section_id = s.id
-        LEFT JOIN priorities p ON c.priority_id = p.id
-    ''')
+    # Get the selected project ID from migration config
+    testrail_project_id = migration_config.get('testrail_project_id') if migration_config else None
+    
+    # Get test cases for the selected project only
+    if testrail_project_id:
+        print(f"  Filtering cases for TestRail project ID: {testrail_project_id}")
+        cursor.execute('''
+            SELECT c.*, s.name as section_name, p.name as priority_name
+            FROM cases c
+            LEFT JOIN sections s ON c.section_id = s.id
+            LEFT JOIN priorities p ON c.priority_id = p.id
+            LEFT JOIN suites su ON c.suite_id = su.id
+            WHERE su.project_id = ?
+        ''', (testrail_project_id,))
+    else:
+        print("  Warning: No project ID specified, migrating all cases")
+        cursor.execute('''
+            SELECT c.*, s.name as section_name, p.name as priority_name
+            FROM cases c
+            LEFT JOIN sections s ON c.section_id = s.id
+            LEFT JOIN priorities p ON c.priority_id = p.id
+        ''')
     
     cases = cursor.fetchall()
     columns = [desc[0] for desc in cursor.description]
@@ -451,18 +499,48 @@ def migrate_test_cases(client, project_key, mapping):
                 description += f"*Section:* {case['section_name']}\n"
             
             # Add preconditions if exists
-            if custom_fields.get('custom_preconds'):
-                description += f"\n*Preconditions:*\n{custom_fields['custom_preconds']}\n"
+            precondition_text = custom_fields.get('custom_preconds')
+            if precondition_text:
+                description += f"\n*Preconditions:*\n{precondition_text}\n"
             
-            # Add steps and expected results
+            # Parse test steps
+            test_steps = None
             if custom_fields.get('custom_steps_separated'):
+                # Handle structured steps
                 description += f"\n*Steps:*\n"
                 try:
                     steps = eval(custom_fields['custom_steps_separated'])
+                    test_steps = []
                     for step in steps:
-                        description += f"- {step}\n"
+                        if isinstance(step, dict):
+                            test_steps.append({
+                                'action': step.get('content', ''),
+                                'data': '',
+                                'expected': step.get('expected', '')
+                            })
+                            description += f"- {step.get('content', '')}\n"
+                            if step.get('expected'):
+                                description += f"  *Expected:* {step.get('expected')}\n"
                 except:
                     pass
+            elif custom_fields.get('custom_steps'):
+                # Handle plain text steps - split by newlines and create steps
+                steps_text = custom_fields['custom_steps']
+                description += f"\n*Steps:*\n{steps_text}\n"
+                
+                # Try to parse into structured steps for Xray
+                test_steps = []
+                step_lines = [line.strip() for line in steps_text.split('\n') if line.strip()]
+                for i, line in enumerate(step_lines, 1):
+                    test_steps.append({
+                        'action': line,
+                        'data': '',
+                        'expected': custom_fields.get('custom_expected', '') if i == len(step_lines) else ''
+                    })
+            
+            # Add expected results if not in steps
+            if custom_fields.get('custom_expected') and not custom_fields.get('custom_steps_separated'):
+                description += f"\n*Expected Results:*\n{custom_fields['custom_expected']}\n"
             
             # Add any additional custom fields
             description += f"\n*Additional Information:*\n"
@@ -471,11 +549,12 @@ def migrate_test_cases(client, project_key, mapping):
             if case.get('estimate'):
                 description += f"- Estimate: {case['estimate']}\n"
             
-            # Create test in Xray
+            # Create test in Xray with steps
             test = client.create_test(
                 project_key=project_key,
                 summary=case['title'],
-                description=description
+                description=description,
+                steps=test_steps
             )
             
             # Store mapping
@@ -499,8 +578,17 @@ def migrate_test_suites(client, project_key, mapping):
     db = get_db_connection()
     cursor = db.cursor()
     
-    # Get all suites
-    cursor.execute('SELECT * FROM suites')
+    # Get the selected project ID from migration config
+    testrail_project_id = migration_config.get('testrail_project_id') if migration_config else None
+    
+    # Get suites for the selected project only
+    if testrail_project_id:
+        print(f"  Filtering suites for TestRail project ID: {testrail_project_id}")
+        cursor.execute('SELECT * FROM suites WHERE project_id = ?', (testrail_project_id,))
+    else:
+        print("  Warning: No project ID specified, migrating all suites")
+        cursor.execute('SELECT * FROM suites')
+    
     suites = cursor.fetchall()
     columns = [desc[0] for desc in cursor.description]
     
@@ -545,8 +633,17 @@ def migrate_test_runs(client, project_key, mapping):
     db = get_db_connection()
     cursor = db.cursor()
     
-    # Get all runs
-    cursor.execute('SELECT * FROM runs ORDER BY created_on')
+    # Get the selected project ID from migration config
+    testrail_project_id = migration_config.get('testrail_project_id') if migration_config else None
+    
+    # Get runs for the selected project only
+    if testrail_project_id:
+        print(f"  Filtering runs for TestRail project ID: {testrail_project_id}")
+        cursor.execute('SELECT * FROM runs WHERE project_id = ? ORDER BY created_on', (testrail_project_id,))
+    else:
+        print("  Warning: No project ID specified, migrating all runs")
+        cursor.execute('SELECT * FROM runs ORDER BY created_on')
+    
     runs = cursor.fetchall()
     columns = [desc[0] for desc in cursor.description]
     
@@ -636,11 +733,20 @@ def migrate_test_results(client, project_key, mapping):
         if run_key not in results_by_execution:
             results_by_execution[run_key] = []
         
+        # Parse defects - only include if there are actual defect keys
+        defects_str = test.get('defects') or ''
+        defects_list = None
+        if defects_str and defects_str.strip():
+            # Split by comma and filter out empty strings
+            defects_list = [d.strip() for d in defects_str.split(',') if d.strip()]
+            if not defects_list:  # If list is empty after filtering, set to None
+                defects_list = None
+        
         results_by_execution[run_key].append({
             'test_key': test_key,
             'status': map_testrail_status_to_xray(test['status_id'], statuses),
             'comment': test.get('comment'),
-            'defects': test.get('defects', '').split(',') if test.get('defects') else None
+            'defects': defects_list
         })
     
     result_count = 0
@@ -684,16 +790,44 @@ def migrate_milestones(client, project_key, mapping):
     db = get_db_connection()
     cursor = db.cursor()
     
-    # Get all milestones
-    cursor.execute('SELECT * FROM milestones ORDER BY due_on')
+    # Get existing versions from Jira to avoid duplicates
+    existing_versions = {}
+    try:
+        versions = client._make_request('GET', f'project/{project_key}/versions')
+        for version in versions:
+            existing_versions[version['name']] = version['id']
+        print(f"  Found {len(existing_versions)} existing version(s) in Jira")
+    except Exception as e:
+        print(f"  Warning: Could not fetch existing versions: {e}")
+    
+    # Get the selected project ID from migration config
+    testrail_project_id = migration_config.get('testrail_project_id') if migration_config else None
+    
+    # Get milestones for the selected project only
+    if testrail_project_id:
+        print(f"  Filtering milestones for TestRail project ID: {testrail_project_id}")
+        cursor.execute('SELECT * FROM milestones WHERE project_id = ? ORDER BY due_on', (testrail_project_id,))
+    else:
+        print("  Warning: No project ID specified, migrating all milestones")
+        cursor.execute('SELECT * FROM milestones ORDER BY due_on')
+    
     milestones = cursor.fetchall()
     columns = [desc[0] for desc in cursor.description]
     
     milestone_count = 0
+    skipped_count = 0
+    
     for row in milestones:
         milestone = dict(zip(columns, row))
         
         try:
+            # Check if version already exists
+            if milestone['name'] in existing_versions:
+                print(f"  ⚠ Skipping milestone '{milestone['name']}' - version already exists")
+                mapping['milestones'][milestone['id']] = existing_versions[milestone['name']]
+                skipped_count += 1
+                continue
+            
             # Create version in Jira
             version_data = {
                 'name': milestone['name'],
@@ -719,7 +853,12 @@ def migrate_milestones(client, project_key, mapping):
             print(f"  ❌ Error migrating milestone {milestone['id']}: {e}")
     
     db.close()
-    print(f"✓ Migrated {milestone_count} milestones as versions")
+    
+    if skipped_count > 0:
+        print(f"✓ Migrated {milestone_count} milestones as versions ({skipped_count} skipped - already exist)")
+    else:
+        print(f"✓ Migrated {milestone_count} milestones as versions")
+    
     return mapping
 
 def migrate_attachments(client, project_key, mapping):
